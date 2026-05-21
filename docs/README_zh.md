@@ -21,6 +21,13 @@
 
 [![演示](../demo/demo.png)](https://media.cdn.vect.one/qwenasr_client_demo.mp4)
 
+## 联系作者
+
+- **邮箱**: [pengzhia@gmail.com](mailto:pengzhia@gmail.com)
+- **微信**:
+
+<img src="../demo/contact.jpg" alt="微信二维码" width="220">
+
 ## Release 1.0.1
 
 > `v1.0.1` 是当前补丁版本。`v1.0.0` 相对于早期 `main` 分支引入了一轮大规模 breaking refactor。

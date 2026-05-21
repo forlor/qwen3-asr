@@ -23,6 +23,13 @@ Speech recognition API service centered on [Qwen3-ASR](https://github.com/QwenLM
 
 [![Demo](./demo/demo.png)](https://media.cdn.vect.one/qwenasr_client_demo.mp4)
 
+## Contact Author
+
+- **Email**: [pengzhia@gmail.com](mailto:pengzhia@gmail.com)
+- **WeChat**:
+
+<img src="./demo/contact.jpg" alt="WeChat QR code" width="220">
+
 ## Release 1.0.1
 
 > `v1.0.1` is the current patch release. `v1.0.0` introduced a large breaking refactor relative to the earlier `main` branch.
