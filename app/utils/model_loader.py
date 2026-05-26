@@ -313,7 +313,7 @@ def _build_required_model_integrity_specs() -> list[ModelIntegritySpec]:
             ModelIntegritySpec(
                 description="Mega-ASR Quality Router Weights",
                 path=router_p,
-                required_patterns=("model.safetensors",),
+                required_patterns=("best_acc_model.safetensors",),
                 min_total_size_bytes=10_000,
             )
         )
