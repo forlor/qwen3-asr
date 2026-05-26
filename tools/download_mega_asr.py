@@ -58,12 +58,10 @@ def download_mega_asr_weights(
     """Download Mega-ASR LoRA and router weights, and Qwen3-ASR base model."""
     success = True
 
-    lora_path = Path(lora_dir)
-    router_path = Path(router_dir)
-
-    # Ensure directories exist
-    lora_path.mkdir(parents=True, exist_ok=True)
-    router_path.mkdir(parents=True, exist_ok=True)
+    # We download directly into local_dir="ckpt/Mega-ASR" so that huggingface_hub
+    # naturally recreates "mega-asr-merged" and "audio_quality_router" directories!
+    local_dir = Path("ckpt/Mega-ASR")
+    local_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Download Qwen3-ASR Base Model
     if not skip_base:
@@ -85,38 +83,19 @@ def download_mega_asr_weights(
     logger.info("Step 2: Downloading Mega-ASR LoRA adapter weights...")
     logger.info("=" * 60)
     try:
-        temp_dir = Path("ckpt/Mega-ASR-temp")
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"Downloading 'mega-asr-merged/adapter_model.safetensors' from Hugging Face repository '{repo_id}'...")
-        downloaded_lora = hf_hub_download(
-            repo_id=repo_id,
-            filename="mega-asr-merged/adapter_model.safetensors",
-            local_dir=str(temp_dir),
-            local_dir_use_symlinks=False
-        )
-        final_lora_file = lora_path / "adapter_model.safetensors"
-        final_lora_file.parent.mkdir(parents=True, exist_ok=True)
-        if os.path.exists(final_lora_file):
-            os.remove(final_lora_file)
-        os.rename(downloaded_lora, final_lora_file)
-        logger.info(f"Successfully placed LoRA weights to: {final_lora_file}")
-
-        try:
-            logger.info(f"Downloading 'mega-asr-merged/adapter_config.json' from Hugging Face repository '{repo_id}'...")
-            downloaded_config = hf_hub_download(
+        for filename in [
+            "mega-asr-merged/adapter_model.safetensors",
+            "mega-asr-merged/adapter_config.json",
+            "mega-asr-merged/mega_lora_blocks.json"
+        ]:
+            logger.info(f"Downloading '{filename}' from Hugging Face repository '{repo_id}'...")
+            hf_hub_download(
                 repo_id=repo_id,
-                filename="mega-asr-merged/adapter_config.json",
-                local_dir=str(temp_dir),
+                filename=filename,
+                local_dir=str(local_dir),
                 local_dir_use_symlinks=False
             )
-            final_config_file = lora_path / "adapter_config.json"
-            if os.path.exists(final_config_file):
-                os.remove(final_config_file)
-            os.rename(downloaded_config, final_config_file)
-            logger.info(f"Successfully placed LoRA config to: {final_config_file}")
-        except Exception as e:
-            logger.warning(f"LoRA adapter_config.json not found or download failed: {e}")
+        logger.info(f"Successfully downloaded LoRA adapter weights to: {local_dir}/mega-asr-merged")
     except Exception as e:
         logger.error(f"Failed to download LoRA weights: {e}")
         success = False
@@ -126,27 +105,14 @@ def download_mega_asr_weights(
     logger.info("Step 3: Downloading Audio Quality Router weights...")
     logger.info("=" * 60)
     try:
-        temp_dir = Path("ckpt/Mega-ASR-temp")
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
         logger.info(f"Downloading 'audio_quality_router/best_acc_model.safetensors' from Hugging Face repository '{repo_id}'...")
-        downloaded_router = hf_hub_download(
+        hf_hub_download(
             repo_id=repo_id,
             filename="audio_quality_router/best_acc_model.safetensors",
-            local_dir=str(temp_dir),
+            local_dir=str(local_dir),
             local_dir_use_symlinks=False
         )
-        final_router_file = router_path / "model.safetensors"
-        final_router_file.parent.mkdir(parents=True, exist_ok=True)
-        if os.path.exists(final_router_file):
-            os.remove(final_router_file)
-        os.rename(downloaded_router, final_router_file)
-        logger.info(f"Successfully placed Router weights to: {final_router_file}")
-
-        # Clean up temp directory
-        import shutil
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+        logger.info(f"Successfully downloaded Router weights to: {local_dir}/audio_quality_router")
     except Exception as e:
         logger.error(f"Failed to download Router weights: {e}")
         success = False
@@ -154,8 +120,8 @@ def download_mega_asr_weights(
     logger.info("=" * 60)
     if success:
         logger.info("All Mega-ASR weights and components have been successfully prepared!")
-        logger.info(f"LoRA weights: {lora_path}/adapter_model.safetensors")
-        logger.info(f"Router weights: {router_path}/model.safetensors")
+        logger.info(f"LoRA weights folder: {local_dir}/mega-asr-merged")
+        logger.info(f"Router weights: {local_dir}/audio_quality_router/best_acc_model.safetensors")
     else:
         logger.error("Some downloads failed. Please check the logs and retry.")
     logger.info("=" * 60)
@@ -176,14 +142,14 @@ def main() -> int:
     parser.add_argument(
         "--lora-dir",
         type=str,
-        default="ckpt/Mega-ASR/lora",
-        help="Local directory to store the LoRA adapter weights (default: ckpt/Mega-ASR/lora)"
+        default="ckpt/Mega-ASR/mega-asr-merged",
+        help="Local directory to store the LoRA adapter weights (default: ckpt/Mega-ASR/mega-asr-merged)"
     )
     parser.add_argument(
         "--router-dir",
         type=str,
-        default="ckpt/Mega-ASR/router",
-        help="Local directory to store the audio quality router weights (default: ckpt/Mega-ASR/router)"
+        default="ckpt/Mega-ASR/audio_quality_router",
+        help="Local directory to store the audio quality router weights (default: ckpt/Mega-ASR/audio_quality_router)"
     )
     parser.add_argument(
         "--base-model",

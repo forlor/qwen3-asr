@@ -68,8 +68,8 @@ class Settings:
     ASR_BATCH_SIZE: int = 4  # ASR 批处理大小（同时推理的片段数），建议 2-8
 
     # Mega-ASR 鲁棒性模型环境配置
-    MEGA_ASR_LORA_PATH: str = "ckpt/Mega-ASR/lora/adapter_model.safetensors"
-    MEGA_ASR_ROUTER_PATH: str = "ckpt/Mega-ASR/router/model.safetensors"
+    MEGA_ASR_LORA_PATH: str = "ckpt/Mega-ASR/mega-asr-merged/adapter_model.safetensors"
+    MEGA_ASR_ROUTER_PATH: str = "ckpt/Mega-ASR/audio_quality_router/best_acc_model.safetensors"
     MEGA_ASR_DEGRADED_THRESHOLD: float = 0.5
 
     # 音频分段配置
