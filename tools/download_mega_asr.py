@@ -85,22 +85,38 @@ def download_mega_asr_weights(
     logger.info("Step 2: Downloading Mega-ASR LoRA adapter weights...")
     logger.info("=" * 60)
     try:
-        # LoRA weights file
-        download_file_safely(
-            repo_id=repo_id,
-            filename="lora/adapter_model.safetensors",
-            local_dir=lora_path.parent  # downloads relative to local_dir so it will end up in lora_path/adapter_model.safetensors
-        )
+        temp_dir = Path("ckpt/Mega-ASR-temp")
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
-        # LoRA config file
+        logger.info(f"Downloading 'mega-asr-merged/adapter_model.safetensors' from Hugging Face repository '{repo_id}'...")
+        downloaded_lora = hf_hub_download(
+            repo_id=repo_id,
+            filename="mega-asr-merged/adapter_model.safetensors",
+            local_dir=str(temp_dir),
+            local_dir_use_symlinks=False
+        )
+        final_lora_file = lora_path / "adapter_model.safetensors"
+        final_lora_file.parent.mkdir(parents=True, exist_ok=True)
+        if os.path.exists(final_lora_file):
+            os.remove(final_lora_file)
+        os.rename(downloaded_lora, final_lora_file)
+        logger.info(f"Successfully placed LoRA weights to: {final_lora_file}")
+
         try:
-            download_file_safely(
+            logger.info(f"Downloading 'mega-asr-merged/adapter_config.json' from Hugging Face repository '{repo_id}'...")
+            downloaded_config = hf_hub_download(
                 repo_id=repo_id,
-                filename="lora/adapter_config.json",
-                local_dir=lora_path.parent
+                filename="mega-asr-merged/adapter_config.json",
+                local_dir=str(temp_dir),
+                local_dir_use_symlinks=False
             )
-        except Exception:
-            logger.warning("LoRA adapter_config.json not found in repository. Continuing without it...")
+            final_config_file = lora_path / "adapter_config.json"
+            if os.path.exists(final_config_file):
+                os.remove(final_config_file)
+            os.rename(downloaded_config, final_config_file)
+            logger.info(f"Successfully placed LoRA config to: {final_config_file}")
+        except Exception as e:
+            logger.warning(f"LoRA adapter_config.json not found or download failed: {e}")
     except Exception as e:
         logger.error(f"Failed to download LoRA weights: {e}")
         success = False
@@ -110,12 +126,27 @@ def download_mega_asr_weights(
     logger.info("Step 3: Downloading Audio Quality Router weights...")
     logger.info("=" * 60)
     try:
-        # Router classification weights file
-        download_file_safely(
+        temp_dir = Path("ckpt/Mega-ASR-temp")
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Downloading 'audio_quality_router/best_acc_model.safetensors' from Hugging Face repository '{repo_id}'...")
+        downloaded_router = hf_hub_download(
             repo_id=repo_id,
-            filename="router/model.safetensors",
-            local_dir=router_path.parent
+            filename="audio_quality_router/best_acc_model.safetensors",
+            local_dir=str(temp_dir),
+            local_dir_use_symlinks=False
         )
+        final_router_file = router_path / "model.safetensors"
+        final_router_file.parent.mkdir(parents=True, exist_ok=True)
+        if os.path.exists(final_router_file):
+            os.remove(final_router_file)
+        os.rename(downloaded_router, final_router_file)
+        logger.info(f"Successfully placed Router weights to: {final_router_file}")
+
+        # Clean up temp directory
+        import shutil
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
     except Exception as e:
         logger.error(f"Failed to download Router weights: {e}")
         success = False
@@ -139,8 +170,8 @@ def main() -> int:
     parser.add_argument(
         "--repo-id",
         type=str,
-        default="xzf-thu/Mega-ASR",
-        help="Hugging Face repository containing Mega-ASR weights (default: xzf-thu/Mega-ASR)"
+        default="zhifeixie/Mega-ASR",
+        help="Hugging Face repository containing Mega-ASR weights (default: zhifeixie/Mega-ASR)"
     )
     parser.add_argument(
         "--lora-dir",
