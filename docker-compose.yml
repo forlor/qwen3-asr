@@ -2,6 +2,9 @@ name: qwen3-asr
 
 services:
   qwen3-asr:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
     image: quantatrisk/qwen3-asr:gpu-latest
     container_name: qwen3-asr
     ports:
