@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gpu
-    image: quantatrisk/qwen3-asr:gpu-latest
+    image: quantatrisk/qwen3-asr-mega:gpu-latest
     container_name: qwen3-asr
     ports:
       - "${NGINX_PORT:-17003}:8000"
