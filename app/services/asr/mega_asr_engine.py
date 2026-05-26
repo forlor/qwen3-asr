@@ -588,15 +588,15 @@ class MegaASREngine(BaseASREngine):
 
     def _load_all_components(self):
         try:
-            from transformers import AutoModelForSpeechSeq2Seq, AutoTokenizer
+            from qwen_asr import Qwen3ASRModel
             logger.info("正在初始化并载入 Qwen3-ASR 基座模型: %s", self.model_path)
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
-            self.base_model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            self.base_model = Qwen3ASRModel.from_pretrained(
                 self.model_path,
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True
-            ).to(self._device)
+                dtype=torch.float16,
+                device_map=self._device,
+                max_inference_batch_size=16,
+                max_new_tokens=1024,
+            )
 
             # 初始化音频路由器
             logger.info("正在初始化音频环境质量路由器: %s", self.router_path)
@@ -611,7 +611,7 @@ class MegaASREngine(BaseASREngine):
             # 兼容：传入的 lora_path 如果 is_file，我们需要传递其所在的目录给 LoRADeltaSwitch
             lora_dir = os.path.dirname(self.lora_path) if self.lora_path.endswith(".safetensors") else self.lora_path
             self.lora_switch = LoRADeltaSwitch(
-                base_model=self.base_model,
+                base_model=self.base_model.model,
                 adapter_dir=lora_dir,
                 keep_delta_on_gpu=True,
             )
@@ -672,15 +672,12 @@ class MegaASREngine(BaseASREngine):
 
     def _run_raw_inference(self, audio_path: str) -> str:
         """运行 PyTorch 模型的前向 ASR 推断"""
-        y, _ = librosa.load(audio_path, sr=16000)
-        inputs = self.tokenizer(y, sampling_rate=16000, return_tensors="pt").to(self._device)
-        with torch.no_grad():
-            generated_ids = self.base_model.generate(
-                inputs.input_features,
-                max_new_tokens=1024,
-                generation_config=self.base_model.generation_config
-            )
-        return self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        results = self.base_model.transcribe(
+            audio=audio_path,
+        )
+        if isinstance(results, list):
+            return str(getattr(results[0], "text", results[0])).strip()
+        return str(getattr(results, "text", results)).strip()
 
     def transcribe_file_with_vad(
         self,
