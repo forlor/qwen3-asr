@@ -1,33 +1,66 @@
-name: qwen3-asr
-
+name: qwen3-asr-mege
 services:
   qwen3-asr:
     build:
       context: .
       dockerfile: Dockerfile.gpu
     image: quantatrisk/qwen3-asr-mega:gpu-latest
-    container_name: qwen3-asr
+    container_name: qwen3-asr-mega
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    shm_size: "16gb"
     ports:
-      - "${NGINX_PORT:-17003}:8000"
+      - "${NGINX_PORT:-18001}:8000"
     volumes:
       - ./temp:/app/temp
       - ./logs:/app/logs
+      # ModelScope 缓存
       - ./data:/app/data
       - ./ckpt:/app/ckpt
       - ./models/modelscope:/root/.cache/modelscope
+      # HuggingFace 缓存
       - ./models/huggingface:/root/.cache/huggingface
-    runtime: nvidia
+      - ./app:/app/app
     environment:
+      # =========================
+      # 基础
+      # =========================
       API_KEY: ${API_KEY:-}
-      MODELSCOPE_PATH: /root/.cache/modelscope/hub/models
-      HF_HOME: /root/.cache/huggingface
-      HF_HUB_LOCAL_FILES_ONLY: ${HF_HUB_LOCAL_FILES_ONLY:-0}
-      QWEN3_ASR_MODEL: ${QWEN3_ASR_MODEL:-}
       VOICEPRINT_ENABLED: ${VOICEPRINT_ENABLED:-true}
       VOICEPRINT_DB_PATH: ${VOICEPRINT_DB_PATH:-./data/voiceprints.sqlite3}
       VOICEPRINT_MATCH_THRESHOLD: ${VOICEPRINT_MATCH_THRESHOLD:-0.70}
       NVIDIA_VISIBLE_DEVICES: all
-      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-6}
+      # =========================
+      # 离线模式（关键）
+      # =========================
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_LOCAL_FILES_ONLY: "1"
+      MODELSCOPE_PATH: /root/.cache/modelscope/hub/models
+      # =========================
+      # 固定模型（关键）
+      # =========================
+      QWEN3_ASR_MODEL: mega-asr-1.7b
+      # =========================
+      # 限制 vLLM 内存
+      # =========================
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      # 降低 KV Cache 占用
+      VLLM_MAX_MODEL_LEN: "2048"
+      # 避免 CUDA graph 峰值过高
+      VLLM_DISABLE_COMPILE_CACHE: "1"
+      VLLM_DISABLE_CUDA_GRAPHS: "1"
+      VLLM_USE_CUDA_GRAPHS: "0"
+      VLLM_MAX_NUM_SEQS: "1"
+      VLLM_ENFORCE_EAGER: "1"
+      VLLM_TORCH_COMPILE_LEVEL: "0"
+      # =========================
+      # nginx 限流
+      # =========================
       NGINX_RATE_LIMIT_RPS: ${NGINX_RATE_LIMIT_RPS:-0}
       NGINX_RATE_LIMIT_BURST: ${NGINX_RATE_LIMIT_BURST:-0}
-    restart: unless-stopped
+    ulimits:
+      memlock: -1
+      stack: 67108864
