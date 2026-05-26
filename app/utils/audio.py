@@ -9,8 +9,6 @@ import tempfile
 import requests
 import librosa
 import soundfile as sf
-import torchaudio
-import torch
 import numpy as np
 import subprocess
 import logging
@@ -333,6 +331,9 @@ def save_audio_array(
 
         # 根据格式选择保存方法
         if format.lower() == "wav":
+            # 延迟安全导入
+            import torch
+            import torchaudio
             # 使用torchaudio保存WAV格式
             audio_tensor = cast(Any, torch).as_tensor(audio_array)
             torchaudio.save(output_path, audio_tensor, sample_rate)

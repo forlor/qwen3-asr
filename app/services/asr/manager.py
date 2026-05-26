@@ -204,6 +204,8 @@ def _register_builtin_engines():
     # 导入引擎模块并注册
     try:
         from .engines import FunASREngine  # noqa: F401
+        if FunASREngine is None:
+            raise ImportError("FunASR is not available (torch or funasr not installed)")
         from .engines.funasr import _register_funasr_engine
         _register_funasr_engine(register_engine, DeclaredEntryConfig)
     except ImportError as e:
@@ -215,6 +217,13 @@ def _register_builtin_engines():
         _register_qwen3_engine(register_engine, DeclaredEntryConfig)
     except ImportError as e:
         logger.warning(f"Qwen3引擎不可用: {e}")
+
+    try:
+        from .mega_asr_engine import MegaASREngine  # noqa: F401
+        from .mega_asr_engine import _register_mega_asr_engine
+        _register_mega_asr_engine(register_engine, DeclaredEntryConfig)
+    except ImportError as e:
+        logger.warning(f"Mega-ASR引擎不可用: {e}")
 
 
 # 模块加载时自动注册内置引擎

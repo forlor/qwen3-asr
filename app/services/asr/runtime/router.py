@@ -25,6 +25,7 @@ class RuntimeFamily(str, Enum):
     QWEN_VLLM = "qwen_vllm"
     QWEN_RUST_CPU = "qwen_rust_cpu"
     FUNASR = "funasr"
+    MEGA_ASR = "mega_asr"
 
 
 @dataclass
@@ -83,6 +84,10 @@ class RuntimeRouter:
 
     def _resolve_family(self, model_id: str) -> RuntimeFamily:
         device = detect_device(settings.DEVICE)
+        if model_id.startswith("mega-asr-"):
+            if device.startswith("cuda"):
+                return RuntimeFamily.MEGA_ASR
+            raise RuntimeError(f"Mega-ASR is only available on CUDA devices, but configured device is '{device}'")
         if model_id.startswith("qwen3-asr-"):
             if device.startswith("cuda"):
                 return RuntimeFamily.QWEN_VLLM
@@ -94,6 +99,8 @@ class RuntimeRouter:
     def _pool_size_for_family(self, family: RuntimeFamily) -> int:
         if family == RuntimeFamily.QWEN_VLLM:
             return 1
+        if family == RuntimeFamily.MEGA_ASR:
+            return 1  # 限制为1以保护并串行化显存安全修改，避免并发冲突
         if family == RuntimeFamily.QWEN_RUST_CPU:
             return settings.QWEN_RUST_CPU_WORKERS
         return settings.FUNASR_WORKERS

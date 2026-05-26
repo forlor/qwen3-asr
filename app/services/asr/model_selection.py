@@ -26,7 +26,7 @@ def get_offline_model_ids() -> List[str]:
     runtime_models = get_runtime_model_ids()
 
     def sort_key(model_id: str) -> tuple[int, str]:
-        if model_id.startswith("qwen"):
+        if model_id.startswith("qwen") or model_id.startswith("mega"):
             return (0, model_id)
         return (1, model_id)
 
@@ -57,11 +57,11 @@ def validate_realtime_model_id(model_id: Optional[str]) -> str:
     if not model_id:
         return get_default_offline_model_id()
 
-    if model_id.lower() == "qwen3-asr":
+    if model_id.lower() == "qwen3-asr" or model_id.lower() == "mega-asr":
         active_qwen_model = get_active_qwen_model_id()
-        if active_qwen_model.startswith("qwen") and active_qwen_model in available_models:
+        if (active_qwen_model.startswith("qwen") or active_qwen_model.startswith("mega")) and active_qwen_model in available_models:
             return active_qwen_model
-        raise InvalidParameterException("当前环境未启用 Qwen3-ASR 模型")
+        raise InvalidParameterException("当前环境未启用 Qwen3-ASR/Mega-ASR 模型")
 
     if model_id not in available_models:
         raise InvalidParameterException(

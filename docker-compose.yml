@@ -10,6 +10,7 @@ services:
       - ./temp:/app/temp
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./ckpt:/app/ckpt
       - ./models/modelscope:/root/.cache/modelscope
       - ./models/huggingface:/root/.cache/huggingface
     runtime: nvidia

@@ -15,16 +15,26 @@ from .base import (
 )
 
 # FunASR引擎
-from .funasr import FunASREngine
+try:
+    from .funasr import FunASREngine
+except ImportError:
+    FunASREngine = None
 
 # 全局模型管理
-from .global_models import (
-    get_global_vad_model,
-    get_global_punc_model,
-    get_global_punc_realtime_model,
-    get_punc_inference_lock,
-    get_punc_realtime_inference_lock,
-)
+try:
+    from .global_models import (
+        get_global_vad_model,
+        get_global_punc_model,
+        get_global_punc_realtime_model,
+        get_punc_inference_lock,
+        get_punc_realtime_inference_lock,
+    )
+except ImportError:
+    get_global_vad_model = None
+    get_global_punc_model = None
+    get_global_punc_realtime_model = None
+    get_punc_inference_lock = None
+    get_punc_realtime_inference_lock = None
 
 __all__ = [
     # 基础类

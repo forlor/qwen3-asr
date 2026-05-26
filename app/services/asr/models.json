@@ -79,6 +79,28 @@
                 "forced_aligner_path": "Qwen/Qwen3-ForcedAligner-0.6B",
                 "max_inference_batch_size": 16
             }
+        },
+        "mega-asr-1.7b": {
+            "name": "Mega-ASR-1.7B",
+            "kind": "model",
+            "engine": "mega_asr",
+            "description": "Mega-ASR 1.7B，基于清华微调套件。采用 Audio Quality Router 智能判定环境，并就地动态加减合并 LoRA 偏差矩阵，噪声和嘈杂环境下识别精度极高",
+            "languages": [
+                "zh",
+                "en",
+                "yue",
+                "ja",
+                "ko"
+            ],
+            "default": false,
+            "supports_realtime": false,
+            "models": {
+                "offline": "Qwen/Qwen3-ASR-1.7B"
+            },
+            "extra_kwargs": {
+                "max_model_len": 16384,
+                "max_inference_batch_size": 16
+            }
         }
     }
 }

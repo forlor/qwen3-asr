@@ -21,6 +21,9 @@ _QWEN_MODEL_ALIASES = {
     "1.7b": "qwen3-asr-1.7b",
     "1.7": "qwen3-asr-1.7b",
     "qwen/qwen3-asr-1.7b": "qwen3-asr-1.7b",
+    "mega-asr-1.7b": "mega-asr-1.7b",
+    "mega-asr": "mega-asr-1.7b",
+    "mega": "mega-asr-1.7b",
 }
 
 
@@ -82,7 +85,7 @@ def get_active_qwen_model(all_model_ids: Optional[list[str]] = None) -> str:
         override_model = get_qwen_model_override()
         if override_model:
             available_qwen_models = ", ".join(
-                model_id for model_id in model_ids if model_id.startswith("qwen")
+                model_id for model_id in model_ids if model_id.startswith("qwen") or model_id.startswith("mega")
             )
             raise RuntimeError(
                 f"{QWEN_MODEL_OVERRIDE_ENV}={override_model} 不在可用 Qwen3-ASR 模型中: "

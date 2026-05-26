@@ -298,6 +298,26 @@ def _build_required_model_integrity_specs() -> list[ModelIntegritySpec]:
             )
         )
 
+    if "mega-asr-1.7b" in runtime_models:
+        lora_p = Path(settings.MEGA_ASR_LORA_PATH).parent
+        specs.append(
+            ModelIntegritySpec(
+                description="Mega-ASR LoRA Weights",
+                path=lora_p,
+                required_patterns=("adapter_model.safetensors",),
+                min_total_size_bytes=10_000_000,
+            )
+        )
+        router_p = Path(settings.MEGA_ASR_ROUTER_PATH).parent
+        specs.append(
+            ModelIntegritySpec(
+                description="Mega-ASR Quality Router Weights",
+                path=router_p,
+                required_patterns=("model.safetensors",),
+                min_total_size_bytes=10_000,
+            )
+        )
+
     return specs
 
 

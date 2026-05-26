@@ -67,6 +67,11 @@ class Settings:
     # 批处理推理配置（GPU 真并行）
     ASR_BATCH_SIZE: int = 4  # ASR 批处理大小（同时推理的片段数），建议 2-8
 
+    # Mega-ASR 鲁棒性模型环境配置
+    MEGA_ASR_LORA_PATH: str = "ckpt/Mega-ASR/lora/adapter_model.safetensors"
+    MEGA_ASR_ROUTER_PATH: str = "ckpt/Mega-ASR/router/model.safetensors"
+    MEGA_ASR_DEGRADED_THRESHOLD: float = 0.5
+
     # 音频分段配置
     MAX_SEGMENT_SEC: float = 60.0  # Max offline ASR segment duration in seconds.
 
@@ -135,6 +140,11 @@ class Settings:
 
         self.ASR_BATCH_SIZE = int(
             os.getenv("ASR_BATCH_SIZE", str(self.ASR_BATCH_SIZE))
+        )
+        self.MEGA_ASR_LORA_PATH = os.getenv("MEGA_ASR_LORA_PATH", self.MEGA_ASR_LORA_PATH)
+        self.MEGA_ASR_ROUTER_PATH = os.getenv("MEGA_ASR_ROUTER_PATH", self.MEGA_ASR_ROUTER_PATH)
+        self.MEGA_ASR_DEGRADED_THRESHOLD = float(
+            os.getenv("MEGA_ASR_DEGRADED_THRESHOLD", str(self.MEGA_ASR_DEGRADED_THRESHOLD))
         )
 
         self.MAX_SEGMENT_SEC = float(
