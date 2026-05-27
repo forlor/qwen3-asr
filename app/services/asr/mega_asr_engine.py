@@ -105,7 +105,19 @@ class PositionalEncoding(_BaseModule):
         self.register_buffer("pe", pe.unsqueeze(0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.pe[:, : x.size(1)]
+        seq_len = x.size(1)
+        if seq_len > self.pe.size(1):
+            # 动态扩展 Positional Encoding，支持超长音频切片，防止维度不匹配报错
+            pe = torch.zeros(seq_len, self.pe.size(2), device=self.pe.device, dtype=self.pe.dtype)
+            position = torch.arange(0, seq_len, dtype=torch.float, device=self.pe.device).unsqueeze(1)
+            div_term = torch.exp(
+                torch.arange(0, self.pe.size(2), 2, device=self.pe.device).float() * (-math.log(10000.0) / self.pe.size(2))
+            )
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+            self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
+
+        x = x + self.pe[:, :seq_len]
         return self.dropout(x)
 
 
