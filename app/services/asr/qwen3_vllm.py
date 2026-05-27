@@ -182,8 +182,27 @@ class Qwen3VLLMBackend:
             "model": model_path,
             "gpu_memory_utilization": gpu_memory_utilization,
         }
-        if max_model_len is not None:
+        
+        # 动态支持并向 vLLM 构造函数注入显存优化相关的环境变量
+        max_model_len_env = os.getenv("VLLM_MAX_MODEL_LEN")
+        if max_model_len_env:
+            llm_kwargs["max_model_len"] = int(max_model_len_env)
+        elif max_model_len is not None:
             llm_kwargs["max_model_len"] = max_model_len
+
+        enforce_eager_env = os.getenv("VLLM_ENFORCE_EAGER")
+        if enforce_eager_env:
+            llm_kwargs["enforce_eager"] = enforce_eager_env.lower() in ("1", "true")
+
+        max_num_seqs_env = os.getenv("VLLM_MAX_NUM_SEQS")
+        if max_num_seqs_env:
+            llm_kwargs["max_num_seqs"] = int(max_num_seqs_env)
+
+        disable_cuda_graphs_env = os.getenv("VLLM_DISABLE_CUDA_GRAPHS") or os.getenv("VLLM_USE_CUDA_GRAPHS")
+        if disable_cuda_graphs_env:
+            if disable_cuda_graphs_env.lower() in ("1", "true", "0", "false"):
+                use_graphs = disable_cuda_graphs_env.lower() not in ("1", "true", "0")
+                llm_kwargs["enforce_eager"] = not use_graphs
 
         self._llm = self._llm_cls(**llm_kwargs)
         self._sampling_params = self._sampling_params_cls(
