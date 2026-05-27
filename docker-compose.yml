@@ -5,13 +5,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gpu
-    image: quantatrisk/qwen3-asr-mega:gpu-latest
+    image: quantatrisk/qwen3-asr:gpu-latest
     container_name: qwen3-asr
     ports:
       - "${NGINX_PORT:-17003}:8000"
     volumes:
       - ./temp:/app/temp
       - ./logs:/app/logs
+      - ./app:/app/app
       - ./data:/app/data
       - ./ckpt:/app/ckpt
       - ./models/modelscope:/root/.cache/modelscope
