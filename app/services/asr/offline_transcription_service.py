@@ -4,15 +4,64 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+import logging
+import threading
+from typing import Any, Dict, Optional
 
 from fastapi import Request
 
+from app.core.config import settings
 from app.models.common import SampleRate
 from app.services.asr.engines import ASRFullResult
 from app.services.asr.model_selection import get_default_offline_model_id
 from app.services.asr.runtime import OfflineASRRequest, get_runtime_router
 from app.services.audio import get_audio_service
+
+
+logger = logging.getLogger(__name__)
+
+
+def _get_audio_quality_router():
+    """延迟加载 AudioQualityRouter 单例（仅在启用时初始化）。"""
+    from app.services.asr.mega_asr_engine import AudioQualityRouter
+    from app.core.device import detect_device
+
+    device = detect_device(settings.DEVICE)
+    return AudioQualityRouter(
+        model_path=settings.AUDIO_QUALITY_ROUTER_PATH,
+        device=device,
+        threshold=settings.AUDIO_QUALITY_THRESHOLD,
+    )
+
+
+_audio_quality_router = None
+_audio_quality_router_lock = threading.Lock()
+
+
+def _assess_audio_quality(audio_path: str, task_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """评估音频质量，返回 {"label": ..., "degraded_prob": ...} 或 None。"""
+    global _audio_quality_router
+
+    if not settings.AUDIO_QUALITY_ENABLED:
+        return None
+
+    try:
+        if _audio_quality_router is None:
+            with _audio_quality_router_lock:
+                if _audio_quality_router is None:
+                    _audio_quality_router = _get_audio_quality_router()
+        result = _audio_quality_router.predict(audio_path)
+        task_prefix = f"[{task_id}] " if task_id else ""
+        logger.info(
+            "%s音频质量评估完成: label=%s, degraded_prob=%.4f",
+            task_prefix,
+            result["label"],
+            result["degraded_prob"],
+        )
+        return result
+    except Exception as exc:
+        logger.warning("音频质量评估不可用，跳过: %s", exc)
+        return None
 
 
 @dataclass(frozen=True)
@@ -86,7 +135,7 @@ class OfflineTranscriptionService:
         options: OfflineTranscriptionOptions,
     ) -> ASRFullResult:
         model_id = get_default_offline_model_id()
-        return await get_runtime_router().run_offline(
+        result = await get_runtime_router().run_offline(
             OfflineASRRequest(
                 model_id=model_id,
                 audio_path=prepared_audio.normalized_path,
@@ -100,6 +149,16 @@ class OfflineTranscriptionService:
                 task_id=options.task_id,
             )
         )
+
+        # 音频质量评估（在推理完成后、清理临时文件前执行）
+        quality = _assess_audio_quality(
+            prepared_audio.normalized_path,
+            task_id=options.task_id,
+        )
+        if quality is not None:
+            result.audio_quality = quality
+
+        return result
 
     def cleanup(self, prepared_audio: Optional[PreparedAudio]) -> None:
         if prepared_audio is None:

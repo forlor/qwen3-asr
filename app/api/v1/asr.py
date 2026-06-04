@@ -279,6 +279,10 @@ async def asr_transcribe(
             "processing_time": round(request_duration, 3),
         }
 
+        # 音频质量评估结果
+        if getattr(asr_result, "audio_quality", None):
+            response_data["audio_quality"] = asr_result.audio_quality
+
         return JSONResponse(content=response_data, headers={"task_id": task_id})
 
     except (
