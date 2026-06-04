@@ -42,7 +42,7 @@ services:
       # =========================
       # 限制 vLLM 内存 与 极速低显存优化
       # =========================
-      QWEN_GPU_MEMORY_UTILIZATION: ${QWEN_GPU_MEMORY_UTILIZATION:-0.08}
+      #QWEN_GPU_MEMORY_UTILIZATION: ${QWEN_GPU_MEMORY_UTILIZATION:-0.08}
       VLLM_WORKER_MULTIPROC_METHOD: spawn
       # 降低 KV Cache 占用
       VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-2048}
