@@ -93,7 +93,7 @@
                 "ko"
             ],
             "default": false,
-            "supports_realtime": false,
+            "supports_realtime": true,
             "models": {
                 "offline": "Qwen/Qwen3-ASR-1.7B"
             },

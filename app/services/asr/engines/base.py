@@ -46,6 +46,7 @@ class ASRFullResult:
     text: str  # 完整识别文本
     segments: List[ASRSegmentResult]  # 分段结果
     duration: float  # 音频总时长（秒）
+    audio_quality: Optional[Dict[str, Any]] = None  # 音频质量评估 {"label": "clean"|"degraded", "degraded_prob": float}
 
 
 @dataclass

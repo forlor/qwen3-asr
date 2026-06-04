@@ -67,10 +67,17 @@ class Settings:
     # 批处理推理配置（GPU 真并行）
     ASR_BATCH_SIZE: int = 4  # ASR 批处理大小（同时推理的片段数），建议 2-8
 
+    # 音频质量评估配置
+    AUDIO_QUALITY_ENABLED: bool = False
+    AUDIO_QUALITY_ROUTER_PATH: str = "ckpt/Mega-ASR/audio_quality_router/best_acc_model.safetensors"
+    AUDIO_QUALITY_THRESHOLD: float = 0.5
+
     # Mega-ASR 鲁棒性模型环境配置
     MEGA_ASR_LORA_PATH: str = "ckpt/Mega-ASR/mega-asr-merged/adapter_model.safetensors"
     MEGA_ASR_ROUTER_PATH: str = "ckpt/Mega-ASR/audio_quality_router/best_acc_model.safetensors"
     MEGA_ASR_DEGRADED_THRESHOLD: float = 0.5
+    MEGA_ASR_VLLM_MATERIALIZED_PATH: str = "ckpt/Mega-ASR/mega-asr-vllm-materialized"
+    MEGA_ASR_FORCE_REMATERIALIZE: bool = False
 
     # 音频分段配置
     MAX_SEGMENT_SEC: float = 60.0  # Max offline ASR segment duration in seconds.
@@ -141,10 +148,30 @@ class Settings:
         self.ASR_BATCH_SIZE = int(
             os.getenv("ASR_BATCH_SIZE", str(self.ASR_BATCH_SIZE))
         )
+
+        # 音频质量评估配置
+        self.AUDIO_QUALITY_ENABLED = (
+            os.getenv("AUDIO_QUALITY_ENABLED", str(self.AUDIO_QUALITY_ENABLED)).lower()
+            in {"1", "true", "yes", "on"}
+        )
+        self.AUDIO_QUALITY_ROUTER_PATH = os.getenv(
+            "AUDIO_QUALITY_ROUTER_PATH", self.AUDIO_QUALITY_ROUTER_PATH
+        )
+        self.AUDIO_QUALITY_THRESHOLD = float(
+            os.getenv("AUDIO_QUALITY_THRESHOLD", str(self.AUDIO_QUALITY_THRESHOLD))
+        )
+
         self.MEGA_ASR_LORA_PATH = os.getenv("MEGA_ASR_LORA_PATH", self.MEGA_ASR_LORA_PATH)
         self.MEGA_ASR_ROUTER_PATH = os.getenv("MEGA_ASR_ROUTER_PATH", self.MEGA_ASR_ROUTER_PATH)
         self.MEGA_ASR_DEGRADED_THRESHOLD = float(
             os.getenv("MEGA_ASR_DEGRADED_THRESHOLD", str(self.MEGA_ASR_DEGRADED_THRESHOLD))
+        )
+        self.MEGA_ASR_VLLM_MATERIALIZED_PATH = os.getenv(
+            "MEGA_ASR_VLLM_MATERIALIZED_PATH", self.MEGA_ASR_VLLM_MATERIALIZED_PATH
+        )
+        self.MEGA_ASR_FORCE_REMATERIALIZE = (
+            os.getenv("MEGA_ASR_FORCE_REMATERIALIZE", str(self.MEGA_ASR_FORCE_REMATERIALIZE)).lower()
+            in {"1", "true", "yes", "on"}
         )
 
         self.MAX_SEGMENT_SEC = float(

@@ -75,6 +75,12 @@ class TranscriptionResponse(BaseModel):
     text: str
 
 
+class AudioQualityInfo(BaseModel):
+    """音频质量评估信息"""
+    label: str = Field(description="音频质量标签: clean(清晰), degraded(降级/嘈杂), unknown(评估失败)")
+    degraded_prob: float = Field(description="音频降级概率 (0.0~1.0, 越高越嘈杂; -1.0 表示评估失败)")
+
+
 class VerboseTranscriptionResponse(BaseModel):
     """详细转写响应 (verbose_json 格式)"""
     task: str = "transcribe"
@@ -83,6 +89,7 @@ class VerboseTranscriptionResponse(BaseModel):
     text: str
     segments: List[TranscriptionSegment] = Field(default_factory=list)
     words: Optional[List[TranscriptionWord]] = None
+    audio_quality: Optional[AudioQualityInfo] = Field(default=None, description="音频质量评估结果（需启用 AUDIO_QUALITY_ENABLED）")
 
 
 class ModelObject(BaseModel):
@@ -197,6 +204,12 @@ def build_transcription_payload(
     detected_language = detect_language(asr_result.text, language)
 
     if response_format == ResponseFormat.VERBOSE_JSON:
+        quality_info = None
+        if getattr(asr_result, "audio_quality", None):
+            quality_info = AudioQualityInfo(
+                label=asr_result.audio_quality["label"],
+                degraded_prob=asr_result.audio_quality["degraded_prob"],
+            )
         payload = VerboseTranscriptionResponse(
             task="transcribe",
             language=detected_language,
@@ -204,6 +217,7 @@ def build_transcription_payload(
             text=asr_result.text,
             segments=segments,
             words=words if words else None,
+            audio_quality=quality_info,
         ).model_dump()
     elif response_format == ResponseFormat.JSON:
         payload = {"text": asr_result.text}

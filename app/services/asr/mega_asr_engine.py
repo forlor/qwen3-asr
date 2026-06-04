@@ -6,13 +6,15 @@ Mega-ASR (Robustness LoRA Enhanced) Engine.
 
 from __future__ import annotations
 
+import gc
 import os
 import json
+import shutil
 import time
 import math
 import logging
 import warnings
-import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Any, Dict
 
@@ -46,6 +48,7 @@ except ImportError:
     safe_open = None
 
 from .engines.base import BaseASREngine, ASRRawResult, ASRSegmentResult
+from .qwen3_vllm import Qwen3VLLMBackend, is_vllm_available
 from ...core.exceptions import DefaultServerErrorException
 from ...core.config import settings
 from ...utils.text_processing import normalize_asr_text
@@ -328,6 +331,28 @@ class AudioQualityRouter:
             )
             return False
 
+    def predict(self, audio_path: str, threshold: Optional[float] = None) -> Dict[str, Any]:
+        """预测音频质量，返回包含标签和概率的字典。
+
+        Returns:
+            dict: {"label": "clean"|"degraded", "degraded_prob": float}
+        """
+        th = threshold if threshold is not None else self.threshold
+        try:
+            with torch.no_grad():
+                waveform = self._load_audio(audio_path)
+                mel = self.mel_extractor(waveform)
+                mel = mel.squeeze(0).transpose(0, 1).unsqueeze(0)
+
+                logits = self.model(mel, mask=None)
+                probs = torch.softmax(logits, dim=-1)
+                degraded_prob = float(probs[0, 1].item())
+                label = "degraded" if degraded_prob >= th else "clean"
+                return {"label": label, "degraded_prob": round(degraded_prob, 4)}
+        except Exception as e:
+            logger.warning("音频质量评估出错 '%s': %s", audio_path, e)
+            return {"label": "unknown", "degraded_prob": -1.0}
+
 
 # ==============================================================================
 # LoRA Delta Switch Controller (Official xzf-thu/Mega-ASR lora_switch.py)
@@ -552,13 +577,26 @@ class LoRADeltaSwitch:
 
 
 # ==============================================================================
-# Mega-ASR Engine implementation (BaseASREngine)
+# Mega-ASR Engine implementation (BaseASREngine) — vLLM + LoRA Materialization
 # ==============================================================================
+
+@dataclass
+class MegaASRStreamingState:
+    internal_state: Any
+    chunk_size_sec: float = 2.0
+    unfixed_chunk_num: int = 2
+    unfixed_token_num: int = 5
+    max_new_tokens: int = 32
+    language: Optional[str] = None
+    chunk_count: int = 0
+    last_text: str = ""
+    last_language: str = ""
+
 
 class MegaASREngine(BaseASREngine):
     """
     清华 Mega-ASR 离线高抗噪 ASR 引擎
-    基于 PyTorch + LoRA Delta Switch 显存注入
+    CUDA 环境使用 vLLM 后端 + LoRA 物化（预合并）方案
     """
 
     def __init__(
@@ -568,72 +606,241 @@ class MegaASREngine(BaseASREngine):
         lora_path: Optional[str] = None,
         router_path: Optional[str] = None,
         degraded_threshold: float = 0.5,
+        max_inference_batch_size: int = 16,
+        max_new_tokens: int = 1024,
+        max_model_len: Optional[int] = None,
         **_kwargs,
     ):
         if torch is None:
-            raise RuntimeError("本引擎需要 PyTorch 环境支持，未检测到 torch 依赖库")
+            raise RuntimeError("Mega-ASR requires PyTorch (needed for LoRA materialization)")
 
         from app.core.device import detect_device
+
         self._device = detect_device(device)
         self.model_id = "mega-asr-1.7b"
         self.model_path = model_path
 
-        # 默认路径回退
         self.lora_path = lora_path or settings.MEGA_ASR_LORA_PATH
         self.router_path = router_path or settings.MEGA_ASR_ROUTER_PATH
         self.degraded_threshold = degraded_threshold
 
-        # 并发推理锁，保证多路 ASR 显存就地安全修改
-        self._infer_lock = threading.Lock()
+        self._backend = self._select_backend()
+        self.model: Optional[Qwen3VLLMBackend] = None
 
-        self.base_model = None
-        self.tokenizer = None
-        self.router = None
-        self.lora_switch = None
-
-        if not self._device.startswith("cuda"):
-            raise DefaultServerErrorException(
-                "Mega-ASR 引擎由于包含直接修改显存的操作，目前必须运行于 CUDA 显卡环境！"
-            )
-
-        self._load_all_components()
-
-    def _load_all_components(self):
         try:
-            from qwen_asr import Qwen3ASRModel
-            logger.info("正在初始化并载入 Qwen3-ASR 基座模型: %s", self.model_path)
-            self.base_model = Qwen3ASRModel.from_pretrained(
-                self.model_path,
-                dtype=torch.float16,
-                device_map=self._device,
-                max_inference_batch_size=16,
-                max_new_tokens=1024,
-            )
-
-            # 初始化音频路由器
-            logger.info("正在初始化音频环境质量路由器: %s", self.router_path)
-            self.router = AudioQualityRouter(
-                model_path=self.router_path,
-                device=self._device,
-                threshold=self.degraded_threshold,
-            )
-
-            # 初始化 LoRA Delta Switch
-            logger.info("正在计算并载入 LoRA 鲁棒增强权重差值: %s", self.lora_path)
-            # 兼容：传入的 lora_path 如果 is_file，我们需要传递其所在的目录给 LoRADeltaSwitch
-            lora_dir = os.path.dirname(self.lora_path) if self.lora_path.endswith(".safetensors") else self.lora_path
-            self.lora_switch = LoRADeltaSwitch(
-                base_model=self.base_model.model,
-                adapter_dir=lora_dir,
-                keep_delta_on_gpu=True,
-            )
-            logger.info("Mega-ASR 联合引擎所有组件全部加载并初始化就绪。")
+            if self._backend == "vllm":
+                materialized_path = self._materialize_checkpoint()
+                self.model = self._load_vllm(
+                    materialized_path,
+                    max_inference_batch_size=max_inference_batch_size,
+                    max_new_tokens=max_new_tokens,
+                    max_model_len=max_model_len,
+                )
+            logger.info("Mega-ASR engine loaded successfully with backend=%s", self._backend)
         except Exception as e:
-            logger.error("Mega-ASR 模型组件加载失败: %s", e)
-            raise DefaultServerErrorException(f"Mega-ASR 模型组件加载失败: {e}")
+            logger.error("Mega-ASR engine load failed: %s", e)
+            raise DefaultServerErrorException(f"Mega-ASR engine load failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Backend selection
+    # ------------------------------------------------------------------
+
+    def _select_backend(self) -> str:
+        if self._device.startswith("cuda"):
+            if not is_vllm_available():
+                raise DefaultServerErrorException(
+                    "Mega-ASR on CUDA requires vLLM. "
+                    "Install with: pip install 'vllm[audio]==0.19.0'"
+                )
+            return "vllm"
+        raise DefaultServerErrorException(
+            f"Mega-ASR is not available on device '{self._device}'. Only CUDA + vLLM is supported."
+        )
+
+    # ------------------------------------------------------------------
+    # LoRA Materialization (one-time pre-merge)
+    # ------------------------------------------------------------------
+
+    _MATERIALIZE_MARKER = "mega_asr_materialized.json"
+
+    def _is_materialized_fresh(self, output_dir: Path) -> bool:
+        """Check if the materialized checkpoint is fresh (matches current config)."""
+        marker_path = output_dir / self._MATERIALIZE_MARKER
+        if not marker_path.is_file() or not (output_dir / "config.json").is_file():
+            return False
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        expected = self._marker_payload(output_dir)
+        return marker == expected
+
+    def _marker_payload(self, output_dir: Path) -> dict[str, Any]:
+        """Build a fingerprint dict for freshness checking (matches official Mega-ASR)."""
+        lora_dir = (
+            os.path.dirname(self.lora_path)
+            if self.lora_path.endswith(".safetensors")
+            else self.lora_path
+        )
+        base_path = Path(self.model_path).expanduser()
+        adapter_path = Path(lora_dir).expanduser()
+        return {
+            "base_model_path": str(base_path),
+            "lora_dir": str(adapter_path),
+            "base_config_mtime": self._path_mtime(base_path / "config.json"),
+            "adapter_config_mtime": self._path_mtime(adapter_path / "adapter_config.json"),
+            "adapter_safetensors_mtime": self._path_mtime(adapter_path / "adapter_model.safetensors"),
+            "adapter_bin_mtime": self._path_mtime(adapter_path / "adapter_model.bin"),
+            "mega_lora_blocks_mtime": self._path_mtime(adapter_path / "mega_lora_blocks.json"),
+        }
+
+    @staticmethod
+    def _path_mtime(path: Path) -> float | None:
+        return path.stat().st_mtime if path.exists() else None
+
+    def _materialize_checkpoint(self) -> str:
+        """Merge LoRA deltas into base model weights and save to disk.
+
+        Follows the official xzf-thu/Mega-ASR materialize_lora.py approach:
+        load base → apply LoRA delta → save merged model + processor.
+        """
+        output_dir = Path(settings.MEGA_ASR_VLLM_MATERIALIZED_PATH)
+
+        # Use file locking to prevent concurrent workers from racing.
+        try:
+            from filelock import FileLock
+        except ImportError:
+            FileLock = None
+
+        lock_path = output_dir.with_name(output_dir.name + ".lock")
+        lock = FileLock(str(lock_path)) if FileLock else None
+
+        def _do_materialize() -> str:
+            # Freshness check inside lock to avoid TOCTOU races.
+            if (
+                not settings.MEGA_ASR_FORCE_REMATERIALIZE
+                and self._is_materialized_fresh(output_dir)
+            ):
+                logger.info("Materialized checkpoint is fresh: %s", output_dir)
+                return str(output_dir)
+
+            if settings.MEGA_ASR_FORCE_REMATERIALIZE:
+                logger.info("Force re-materialization requested")
+
+            logger.info("=" * 60)
+            logger.info("Starting LoRA materialization (one-time pre-merge)...")
+            logger.info("Base model: %s", self.model_path)
+            logger.info("LoRA adapter: %s", self.lora_path)
+            logger.info("Output: %s", output_dir)
+            logger.info("=" * 60)
+
+            from qwen_asr import Qwen3ASRModel
+
+            # Match official defaults: bfloat16 on CUDA, float32 on CPU.
+            mat_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            mat_dtype = torch.bfloat16 if mat_device != "cpu" else torch.float32
+
+            # 1. Load base model with minimal params (official uses 1, 1).
+            logger.info("Step 1/5: Loading base model on %s (%s)...", mat_device, mat_dtype)
+            base_model = Qwen3ASRModel.from_pretrained(
+                self.model_path,
+                dtype=mat_dtype,
+                device_map=mat_device,
+                max_inference_batch_size=1,
+                max_new_tokens=1,
+            )
+
+            # 2. Apply LoRA via LoRADeltaSwitch
+            logger.info("Step 2/5: Applying LoRA delta weights...")
+            lora_dir = (
+                os.path.dirname(self.lora_path)
+                if self.lora_path.endswith(".safetensors")
+                else self.lora_path
+            )
+            lora_switch = LoRADeltaSwitch(
+                base_model=base_model.model,
+                adapter_dir=lora_dir,
+                keep_delta_on_gpu=(mat_device.startswith("cuda")),
+            )
+            lora_switch.merge()
+            logger.info(
+                "LoRA merged successfully (%d weight deltas applied)",
+                len(lora_switch.items),
+            )
+
+            # 3. Clean output directory, then save merged model + processor.
+            logger.info("Step 3/5: Saving materialized checkpoint to %s...", output_dir)
+            if output_dir.exists():
+                shutil.rmtree(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            base_model.model.save_pretrained(
+                str(output_dir),
+                safe_serialization=True,
+                max_shard_size="2GB",
+            )
+            base_model.processor.save_pretrained(str(output_dir))
+
+            # 4. Write freshness marker.
+            marker = self._marker_payload(output_dir)
+            (output_dir / self._MATERIALIZE_MARKER).write_text(
+                json.dumps(marker, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            # 5. Cleanup.
+            logger.info("Step 4/5: Releasing memory...")
+            del lora_switch
+            del base_model
+            gc.collect()
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            logger.info("=" * 60)
+            logger.info("LoRA materialization complete! Checkpoint saved to: %s", output_dir)
+            logger.info("=" * 60)
+            return str(output_dir)
+
+        if lock:
+            with lock:
+                return _do_materialize()
+        return _do_materialize()
+
+    # ------------------------------------------------------------------
+    # vLLM backend loading
+    # ------------------------------------------------------------------
+
+    def _load_vllm(
+        self,
+        model_path: str,
+        max_inference_batch_size: int,
+        max_new_tokens: int,
+        max_model_len: Optional[int],
+    ) -> Qwen3VLLMBackend:
+        from .qwen3_engine import calculate_gpu_memory_utilization
+
+        gpu_memory_utilization = calculate_gpu_memory_utilization(model_path)
+        logger.info(
+            "Loading Mega-ASR (vLLM): %s, gpu_memory_utilization=%s",
+            model_path,
+            gpu_memory_utilization,
+        )
+        return Qwen3VLLMBackend(
+            model_path=model_path,
+            forced_aligner_path=None,
+            gpu_memory_utilization=gpu_memory_utilization,
+            max_inference_batch_size=max_inference_batch_size,
+            max_new_tokens=max_new_tokens,
+            max_model_len=max_model_len,
+        )
+
+    # ------------------------------------------------------------------
+    # Engine interface
+    # ------------------------------------------------------------------
 
     def is_model_loaded(self) -> bool:
-        return self.base_model is not None
+        return self.model is not None
 
     @property
     def device(self) -> str:
@@ -641,7 +848,11 @@ class MegaASREngine(BaseASREngine):
 
     @property
     def supports_realtime(self) -> bool:
-        return False
+        return self._backend == "vllm"
+
+    # ------------------------------------------------------------------
+    # Offline transcription
+    # ------------------------------------------------------------------
 
     def transcribe_file(
         self,
@@ -652,44 +863,17 @@ class MegaASREngine(BaseASREngine):
         enable_vad: bool = False,
         sample_rate: int = 16000,
     ) -> str:
-        """单音频转写流程"""
         if not self.is_model_loaded():
-            raise DefaultServerErrorException("Mega-ASR 引擎未正确装载")
-
-        # 使用显存锁互斥操作
-        with self._infer_lock:
-            # 1. 路由器预判音频环境
-            is_degraded = self.router.predict_is_degraded(audio_path)
-            logger.info(
-                "音频文件 '%s' 环境评估结果: %s",
+            raise DefaultServerErrorException("Mega-ASR engine not loaded")
+        if self._backend == "vllm":
+            return self.model.transcribe_text(
                 audio_path,
-                "降级受污染 (Degraded)" if is_degraded else "纯净优良 (Clean)"
+                context=hotwords or "",
+                enable_itn=enable_itn,
             )
-
-            # 2. 动态就地合并权重差值
-            if is_degraded:
-                logger.debug("动态注入噪声鲁棒微调权重 ΔW...")
-                self.lora_switch.merge()
-
-            try:
-                # 3. 执行 PyTorch 原生推理
-                text = self._run_raw_inference(audio_path)
-            finally:
-                # 4. 回滚合并，恢复模型至基座状态
-                if is_degraded:
-                    logger.debug("动态扣除噪声鲁棒微调权重 ΔW 并恢复...")
-                    self.lora_switch.unmerge()
-
-            return normalize_asr_text(text, enable_itn=enable_itn)
-
-    def _run_raw_inference(self, audio_path: str) -> str:
-        """运行 PyTorch 模型的前向 ASR 推断"""
-        results = self.base_model.transcribe(
-            audio=audio_path,
+        raise DefaultServerErrorException(
+            f"Mega-ASR backend={self._backend} does not support transcription"
         )
-        if isinstance(results, list):
-            return str(getattr(results[0], "text", results[0])).strip()
-        return str(getattr(results, "text", results)).strip()
 
     def transcribe_file_with_vad(
         self,
@@ -698,18 +882,20 @@ class MegaASREngine(BaseASREngine):
         enable_punctuation: bool = True,
         enable_itn: bool = True,
         sample_rate: int = 16000,
-        **_kwargs,
+        **kwargs,
     ) -> ASRRawResult:
-        text = self.transcribe_file(
-            audio_path=audio_path,
-            hotwords=hotwords,
-            enable_punctuation=enable_punctuation,
-            enable_itn=enable_itn,
-            sample_rate=sample_rate,
-        )
-        return ASRRawResult(
-            text=text,
-            segments=[ASRSegmentResult(text=text, start_time=0.0, end_time=0.0)]
+        if not self.is_model_loaded():
+            raise DefaultServerErrorException("Mega-ASR engine not loaded")
+        if self._backend == "vllm":
+            return self.model.transcribe_raw(
+                audio_path=audio_path,
+                context=hotwords or "",
+                language=kwargs.get("language"),
+                word_timestamps=kwargs.get("word_timestamps", False),
+                enable_itn=enable_itn,
+            )
+        raise DefaultServerErrorException(
+            f"Mega-ASR backend={self._backend} does not support VAD transcription"
         )
 
     def _transcribe_batch(
@@ -721,76 +907,149 @@ class MegaASREngine(BaseASREngine):
         sample_rate: int = 16000,
         word_timestamps: bool = False,
     ) -> List[ASRSegmentResult]:
-        """批量多任务推理 - 高性能分组机制"""
         if not segments:
             return []
+        if not self.is_model_loaded():
+            raise DefaultServerErrorException("Mega-ASR engine not loaded")
 
-        # 双向倒排索引重映射准备
-        clean_idx_map = []
-        degraded_idx_map = []
+        if self._backend == "vllm":
+            output = [
+                ASRSegmentResult(text="", start_time=0.0, end_time=0.0)
+                for _ in segments
+            ]
+            valid: List[tuple[int, Any]] = []
+            for idx, seg in enumerate(segments):
+                temp_file = getattr(seg, "temp_file", None)
+                if temp_file and os.path.exists(temp_file):
+                    valid.append((idx, seg))
+                else:
+                    logger.warning(
+                        "Mega-ASR batch segment invalid: segment=%d, file=%s",
+                        idx + 1,
+                        temp_file,
+                    )
+            if not valid:
+                return output
 
-        # 1. 对整个 batch 的所有切片进行路由器并行判定并归类
-        for idx, seg in enumerate(segments):
-            if not seg.temp_file:
-                continue
-            is_degraded = self.router.predict_is_degraded(seg.temp_file)
-            if is_degraded:
-                degraded_idx_map.append((idx, seg.temp_file))
-            else:
-                clean_idx_map.append((idx, seg.temp_file))
+            # Per-segment error handling: a single corrupted audio should not
+            # abort the entire batch.
+            valid_paths = [seg.temp_file for _, seg in valid]
+            try:
+                vllm_results = self.model.transcribe_batch(
+                    valid_paths,
+                    context=hotwords or "",
+                    word_timestamps=word_timestamps,
+                    enable_itn=enable_itn,
+                )
+            except Exception as exc:
+                logger.error("Mega-ASR vLLM batch failed, falling back to per-segment: %s", exc)
+                vllm_results = []
+                for _idx, seg in valid:
+                    try:
+                        result = self.model.transcribe_batch(
+                            [seg.temp_file],
+                            context=hotwords or "",
+                            word_timestamps=word_timestamps,
+                            enable_itn=enable_itn,
+                        )
+                        vllm_results.append(result[0])
+                    except Exception as seg_exc:
+                        logger.error(
+                            "Mega-ASR segment %d failed: %s",
+                            _idx + 1,
+                            seg_exc,
+                        )
+                        vllm_results.append(
+                            ASRSegmentResult(text="", start_time=0.0, end_time=0.0)
+                        )
+            for (idx, seg), result in zip(valid, vllm_results):
+                output[idx] = ASRSegmentResult(
+                    text=result.text,
+                    start_time=round(seg.start_sec, 2),
+                    end_time=round(seg.end_sec, 2),
+                    speaker_id=getattr(seg, "speaker_id", None),
+                    word_tokens=result.word_tokens if word_timestamps else None,
+                )
+            return output
 
-        logger.info(
-            "音频切片批量分流完成: 纯净良质(Clean)数量=%d, 降级抗噪(Degraded)数量=%d",
-            len(clean_idx_map),
-            len(degraded_idx_map),
+        raise DefaultServerErrorException(
+            f"Mega-ASR backend={self._backend} does not support batch transcription"
         )
 
-        results_dict: Dict[int, str] = {}
+    # ------------------------------------------------------------------
+    # Streaming (vLLM only)
+    # ------------------------------------------------------------------
 
-        # 锁显存
-        with self._infer_lock:
-            # 2. 第一步：在 Base 状态（无 LoRA）下批量推理 Clean 组
-            if clean_idx_map:
-                logger.debug("开始执行 Clean 音频分流的并行推断...")
-                for orig_idx, path in clean_idx_map:
-                    try:
-                        results_dict[orig_idx] = self._run_raw_inference(path)
-                    except Exception as exc:
-                        logger.error("Clean 音频切片推理失败 orig_idx=%d: %s", orig_idx, exc)
-                        results_dict[orig_idx] = ""
-
-            # 3. 第二步：一键加装 LoRA，并批量推理 Degraded 组
-            if degraded_idx_map:
-                logger.debug("切换模型权重 (LoRA Delta Switch Merge)...")
-                self.lora_switch.merge()
-                try:
-                    logger.debug("开始执行 Degraded 音频分流的鲁棒增强型并行推断...")
-                    for orig_idx, path in degraded_idx_map:
-                        try:
-                            results_dict[orig_idx] = self._run_raw_inference(path)
-                        except Exception as exc:
-                            logger.error("Degraded 音频切片推理失败 orig_idx=%d: %s", orig_idx, exc)
-                            results_dict[orig_idx] = ""
-                finally:
-                    # 4. 第三步：推断完毕卸载 LoRA，恢复基座
-                    logger.debug("回滚并释放模型权重 (LoRA Delta Switch Unmerge)...")
-                    self.lora_switch.unmerge()
-
-        # 5. 反重组序列拼装
-        final_results = []
-        for idx, seg in enumerate(segments):
-            raw_text = results_dict.get(idx, "")
-            processed_text = normalize_asr_text(raw_text, enable_itn=enable_itn)
-            final_results.append(
-                ASRSegmentResult(
-                    text=processed_text,
-                    start_time=getattr(seg, "start_sec", 0.0),
-                    end_time=getattr(seg, "end_sec", 0.0),
-                    speaker_id=getattr(seg, "speaker_id", None)
-                )
+    def init_streaming_state(
+        self,
+        context: str = "",
+        language: Optional[str] = None,
+        **kwargs,
+    ) -> MegaASRStreamingState:
+        if self._backend != "vllm":
+            raise DefaultServerErrorException(
+                f"Mega-ASR backend={self._backend} does not support streaming"
             )
+        streaming_state = self.model.init_streaming_state(
+            context=context, language=language, **kwargs
+        )
+        return MegaASRStreamingState(
+            internal_state=streaming_state,
+            chunk_size_sec=float(kwargs.get("chunk_size_sec", 2.0)),
+            unfixed_chunk_num=int(kwargs.get("unfixed_chunk_num", 2)),
+            unfixed_token_num=int(kwargs.get("unfixed_token_num", 5)),
+            max_new_tokens=int(kwargs.get("max_new_tokens", 32)),
+            language=language,
+            chunk_count=int(getattr(streaming_state, "chunk_id", 0)),
+            last_text=str(getattr(streaming_state, "text", "") or ""),
+            last_language=str(getattr(streaming_state, "language", "") or ""),
+        )
 
-        return final_results
+    def streaming_transcribe(
+        self,
+        pcm16k: np.ndarray,
+        state: MegaASRStreamingState,
+    ) -> MegaASRStreamingState:
+        if self._backend != "vllm":
+            raise DefaultServerErrorException(
+                f"Mega-ASR backend={self._backend} does not support streaming"
+            )
+        pcm = pcm16k.astype(np.float32) / (
+            32768.0 if pcm16k.dtype == np.int16 else 1.0
+        )
+        streaming_state = self.model.feed_stream(pcm, state.internal_state)
+        state.internal_state = streaming_state
+        state.chunk_count = int(
+            getattr(streaming_state, "chunk_id", state.chunk_count)
+        )
+        state.last_text = str(
+            getattr(streaming_state, "text", "") or ""
+        )
+        state.last_language = str(
+            getattr(streaming_state, "language", "") or ""
+        )
+        return state
+
+    def finish_streaming_transcribe(
+        self,
+        state: MegaASRStreamingState,
+    ) -> MegaASRStreamingState:
+        if self._backend != "vllm":
+            raise DefaultServerErrorException(
+                f"Mega-ASR backend={self._backend} does not support streaming"
+            )
+        streaming_state = self.model.finish_stream(state.internal_state)
+        state.internal_state = streaming_state
+        state.chunk_count = int(
+            getattr(streaming_state, "chunk_id", state.chunk_count)
+        )
+        state.last_text = str(
+            getattr(streaming_state, "text", "") or ""
+        )
+        state.last_language = str(
+            getattr(streaming_state, "language", "") or ""
+        )
+        return state
 
 
 def _register_mega_asr_engine(register_func, _declared_entry_cls):
