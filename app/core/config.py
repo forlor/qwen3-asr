@@ -68,7 +68,7 @@ class Settings:
     ASR_BATCH_SIZE: int = 4  # ASR 批处理大小（同时推理的片段数），建议 2-8
 
     # 音频质量评估配置
-    AUDIO_QUALITY_ENABLED: bool = False
+    AUDIO_QUALITY_ENABLED: bool = True
     AUDIO_QUALITY_ROUTER_PATH: str = "ckpt/Mega-ASR/audio_quality_router/best_acc_model.safetensors"
     AUDIO_QUALITY_THRESHOLD: float = 0.5
 

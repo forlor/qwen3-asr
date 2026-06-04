@@ -40,6 +40,11 @@ services:
       # =========================
       QWEN3_ASR_MODEL: ${QWEN3_ASR_MODEL:-qwen3-asr-0.6b}
       # =========================
+      # 音频质量评估
+      # =========================
+      AUDIO_QUALITY_ENABLED: ${AUDIO_QUALITY_ENABLED:-true}
+      AUDIO_QUALITY_THRESHOLD: ${AUDIO_QUALITY_THRESHOLD:-0.5}
+      # =========================
       # 限制 vLLM 内存 与 极速低显存优化
       # =========================
       #QWEN_GPU_MEMORY_UTILIZATION: ${QWEN_GPU_MEMORY_UTILIZATION:-0.08}
