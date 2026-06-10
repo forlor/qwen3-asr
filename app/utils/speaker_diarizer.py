@@ -251,9 +251,8 @@ class SpeakerDiarizer:
 
     DEFAULT_MIN_SEGMENT_SEC = 1.0
     DEFAULT_SAMPLE_RATE = 16000
-    # 短片段（<3秒）的前后填充时长（秒），给 ASR 更多上下文
-    SHORT_SEGMENT_PAD_SEC = 2.0
-    SHORT_SEGMENT_THRESHOLD_SEC = 3.0
+    # 短片段最小输出时长（秒），不足则用静音填充
+    MIN_OUTPUT_SEC = 3.0
     LOW_ENERGY_SEARCH_WINDOW_MS = 10000
     LOW_ENERGY_CONTEXT_MS = 160
     LOW_ENERGY_STEP_MS = 20
@@ -651,22 +650,24 @@ class SpeakerDiarizer:
 
                 seg.audio_data = audio_data[start_sample:end_sample]
 
-                # 短片段填充：前后各加 SHORT_SEGMENT_PAD_SEC 秒上下文
-                # 提升短语音的 ASR 识别准确率
-                if seg.duration_sec < self.SHORT_SEGMENT_THRESHOLD_SEC:
-                    pad_samples = int(self.SHORT_SEGMENT_PAD_SEC * sample_rate)
-                    padded_start = max(0, start_sample - pad_samples)
-                    padded_end = min(len(audio_data), end_sample + pad_samples)
-                    padded_audio = audio_data[padded_start:padded_end]
-                    actual_pad_sec = self.SHORT_SEGMENT_PAD_SEC
+                # 短片段静音填充：不足 MIN_OUTPUT_SEC 则前后补静音
+                # 给 ASR 模型足够的音频长度，不引入额外语音内容
+                min_samples = int(self.MIN_OUTPUT_SEC * sample_rate)
+                if len(seg.audio_data) < min_samples:
+                    shortfall = min_samples - len(seg.audio_data)
+                    pad_before = shortfall // 2
+                    pad_after = shortfall - pad_before
+                    silence_before = np.zeros(pad_before, dtype=np.float32)
+                    silence_after = np.zeros(pad_after, dtype=np.float32)
+                    padded = np.concatenate([silence_before, seg.audio_data, silence_after])
                     logger.debug(
                         f"[短片段填充] {seg.speaker_id} #{idx}: "
                         f"原始 {seg.duration_sec:.2f}s → "
-                        f"填充后 {len(padded_audio)/sample_rate:.2f}s"
+                        f"填充后 {len(padded)/sample_rate:.2f}s"
                     )
+                    output_audio = padded
                 else:
-                    padded_audio = seg.audio_data
-                    actual_pad_sec = 0.0
+                    output_audio = seg.audio_data
 
                 # 保存临时文件
                 temp_file = tempfile.NamedTemporaryFile(
@@ -678,7 +679,7 @@ class SpeakerDiarizer:
                 temp_path = temp_file.name
                 temp_file.close()
 
-                sf.write(temp_path, padded_audio, sample_rate)
+                sf.write(temp_path, output_audio, sample_rate)
                 seg.temp_file = temp_path
 
             # 统计
