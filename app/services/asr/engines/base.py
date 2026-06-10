@@ -353,6 +353,9 @@ class BaseASREngine(ABC):
             speaker_turns: 说话人片段列表（绝对时间）
             pad_offset_sec: chunk 前置静音填充的秒数，需减去以修正偏移
         """
+        import re
+
+        # 1. 基础匹配：计算每个 word 的绝对时间，并匹配重叠最多的 speaker
         for word in word_tokens:
             # 减去前置静音偏移，再转为绝对时间
             abs_start = word.start_time - pad_offset_sec + chunk_start_sec
@@ -384,6 +387,46 @@ class BaseASREngine(ABC):
             word.speaker_id = best_speaker
             word.start_time = abs_start
             word.end_time = abs_end
+
+        # 2. 上下文平滑 (Phrase-level Smoothing)
+        # 防止单字或短词因为处于时间边界而被错误划分到另一个说话人，导致一句话被切碎。
+        # 策略：按标点或明显停顿切分短语，短语内的词统一归属为该短语内占比最大的说话人。
+        phrases = []
+        current_phrase = []
+        for i, word in enumerate(word_tokens):
+            current_phrase.append(word)
+
+            # 判断是否为短语结束点：
+            # a. 包含句末/句中停顿标点
+            has_punc = bool(re.search(r'[，。！？、；,.\?!;]', word.text))
+            # b. 与下一个词之间有明显的停顿 (> 0.4s)
+            has_pause = False
+            if i < len(word_tokens) - 1:
+                if word_tokens[i+1].start_time - word.end_time > 0.4:
+                    has_pause = True
+
+            if has_punc or has_pause or i == len(word_tokens) - 1:
+                phrases.append(current_phrase)
+                current_phrase = []
+
+        # 对每个短语，进行投票决定最终 speaker
+        for phrase in phrases:
+            if not phrase:
+                continue
+
+            # 统计每个 speaker 在该短语中的总时长
+            spk_durations = {}
+            for w in phrase:
+                spk = w.speaker_id
+                dur = max(0.0, w.end_time - w.start_time)
+                spk_durations[spk] = spk_durations.get(spk, 0.0) + dur
+
+            if spk_durations:
+                # 选出该短语的主要说话人
+                dominant_spk = max(spk_durations, key=spk_durations.get)
+                # 统一修正该短语下所有词的 speaker_id
+                for w in phrase:
+                    w.speaker_id = dominant_spk
 
     @staticmethod
     def _split_by_speaker(
