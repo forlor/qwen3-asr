@@ -227,10 +227,9 @@ def _enable_batched_sv(
     pipeline_instance._batched_sv_enabled = True
 
     logger.info(
-        "CAM++ 说话人分离启用 batched SV: device={}, sv_device={}, vad_device={}",
-        modelscope_device,
-        getattr(getattr(pipeline_instance, "sv_pipeline", None), "device_name", "unknown"),
-        getattr(getattr(pipeline_instance, "vad_pipeline", None), "device_name", "unknown"),
+        f"CAM++ 说话人分离启用 batched SV: device={modelscope_device}, "
+        f"sv_device={getattr(getattr(pipeline_instance, 'sv_pipeline', None), 'device_name', 'unknown')}, "
+        f"vad_device={getattr(getattr(pipeline_instance, 'vad_pipeline', None), 'device_name', 'unknown')}",
     )
     return pipeline_instance
 
@@ -250,9 +249,7 @@ def get_global_diarization_pipeline() -> Any:
                 modelscope_device = _resolve_modelscope_device()
 
                 logger.info(
-                    "正在加载 CAM++ 说话人分离模型: {}, device={}",
-                    model_path,
-                    modelscope_device,
+                    f"正在加载 CAM++ 说话人分离模型: {model_path}, device={modelscope_device}",
                 )
                 _global_diarization_pipeline = _create_modelscope_pipeline(
                     task=Tasks.speaker_diarization,
