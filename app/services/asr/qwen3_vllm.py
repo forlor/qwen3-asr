@@ -443,8 +443,8 @@ class Qwen3VLLMBackend:
             start_ms = ts_predictions[index * 2]
             end_ms = ts_predictions[index * 2 + 1]
             if end_ms < start_ms:
-                logger.warning(
-                    "Forced aligner produced reversed timestamps for token=%r: start_ms=%s end_ms=%s",
+                logger.debug(
+                    "Forced aligner reversed timestamps for token=%r: start_ms=%s end_ms=%s (swapped)",
                     token,
                     start_ms,
                     end_ms,
