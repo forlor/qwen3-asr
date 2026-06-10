@@ -278,7 +278,7 @@ class SpeakerDiarizer:
 
             logger.info(f"开始说话人分离: {audio_path}")
             with _diarization_inference_semaphore:
-                result = pipeline(audio_path, merge_thr=0.90)
+                result = pipeline(audio_path, merge_thr=0.95)
 
             # 解析结果: {'text': [[start, end, speaker_id], ...]}
             # pipeline 返回类型不确定，需要安全地获取 'text' 字段
@@ -288,12 +288,14 @@ class SpeakerDiarizer:
                 raw_output = getattr(result, 'text', []) or []
 
             segments = []
+            unique_speakers = set()
             for seg in raw_output:
                 if isinstance(seg, list) and len(seg) == 3:
                     try:
                         start_ms = int(float(seg[0]) * 1000)
                         end_ms = int(float(seg[1]) * 1000)
                         speaker_id = f"说话人{int(seg[2]) + 1}"
+                        unique_speakers.add(speaker_id)
                         segments.append(SpeakerSegment(
                             start_ms=start_ms,
                             end_ms=end_ms,
@@ -302,7 +304,10 @@ class SpeakerDiarizer:
                     except (ValueError, TypeError) as e:
                         logger.warning(f"跳过格式错误的片段: {seg}, 错误: {e}")
 
-            logger.info(f"说话人分离完成，原始片段数: {len(segments)}")
+            logger.info(
+                f"[说话人分离] merge_thr=0.95, 原始片段数: {len(segments)}, "
+                f"检测到说话人数: {len(unique_speakers)}, 说话人: {unique_speakers}"
+            )
             # 诊断日志：打印前20个原始片段
             for i, seg in enumerate(segments[:20]):
                 logger.debug(
