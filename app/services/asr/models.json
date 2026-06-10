@@ -1,19 +1,5 @@
 {
     "models": {
-        "paraformer-large": {
-            "name": "Paraformer Large",
-            "kind": "capability",
-            "engine": "funasr",
-            "description": "中文 WebSocket 实时识别能力（Paraformer realtime stack）",
-            "languages": [
-                "zh"
-            ],
-            "default": false,
-            "supports_realtime": true,
-            "models": {
-                "realtime": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online"
-            }
-        },
         "qwen3-asr-1.7b": {
             "name": "Qwen3-ASR-1.7B",
             "kind": "model",
