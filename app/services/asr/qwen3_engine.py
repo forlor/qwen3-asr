@@ -343,12 +343,7 @@ class Qwen3ASREngine(BaseASREngine):
         if not self._forced_aligner_path:
             return
         if self._backend == "vllm":
-            try:
-                self.model.ensure_forced_aligner_loaded()
-            except Exception as e:
-                logger.warning(
-                    "Forced aligner warmup failed (will retry on first use): %s", e,
-                )
+            self.model.ensure_forced_aligner_loaded()
 
     def _load_vllm(
         self, model_path: str, forced_aligner_path: Optional[str],
