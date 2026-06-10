@@ -203,7 +203,7 @@ class BaseASREngine(ABC):
                             )
                             # 按说话人拆分为多个 segment
                             split_segs = self._split_by_speaker(
-                                result.word_tokens, chunk.start_sec
+                                result.word_tokens
                             )
                             results.extend(split_segs)
                             all_texts.extend(s.text for s in split_segs)
@@ -369,7 +369,6 @@ class BaseASREngine(ABC):
     @staticmethod
     def _split_by_speaker(
         word_tokens: List["WordToken"],
-        chunk_start_sec: float,
     ) -> List[ASRSegmentResult]:
         """按说话人切换拆分 word 列表为多个 ASRSegmentResult"""
         if not word_tokens:
@@ -390,7 +389,7 @@ class BaseASREngine(ABC):
                         start_time=current_words[0].start_time,
                         end_time=current_words[-1].end_time,
                         speaker_id=current_speaker,
-                        word_tokens=current_words if len(current_words) > 1 else None,
+                        word_tokens=current_words,
                     )
                 )
                 current_speaker = speaker
@@ -404,7 +403,7 @@ class BaseASREngine(ABC):
                     start_time=current_words[0].start_time,
                     end_time=current_words[-1].end_time,
                     speaker_id=current_speaker,
-                    word_tokens=current_words if len(current_words) > 1 else None,
+                    word_tokens=current_words,
                 )
             )
         return results

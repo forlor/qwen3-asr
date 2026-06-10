@@ -334,7 +334,7 @@ class SpeakerDiarizer:
                         logger.warning(f"跳过格式错误的片段: {seg}, 错误: {e}")
 
             logger.info(
-                f"[说话人分离] merge_thr=0.95, 原始片段数: {len(segments)}, "
+                f"[说话人分离] merge_thr={pipeline_kwargs.get('merge_thr', 'auto')}, 原始片段数: {len(segments)}, "
                 f"检测到说话人数: {len(unique_speakers)}, 说话人: {unique_speakers}"
             )
             # 诊断日志：打印前20个原始片段
@@ -768,7 +768,15 @@ class SpeakerDiarizer:
         # 2. 合并同一说话人连续片段（避免在说话人内部有微小间隙导致分段过碎）
         merged = self.merge_consecutive_segments(raw_segments)
 
-        # 3. 按说话人切换点累加，每段不超过 MAX_SEGMENT_SEC
+        # 3. 加载音频，用于拆分超长片段
+        logger.info("加载音频并构建 ASR 分块...")
+        audio_data, sr = librosa.load(audio_path, sr=self.DEFAULT_SAMPLE_RATE)
+        sample_rate = int(sr)
+
+        # 4. 拆分超过 MAX_SEGMENT_SEC 的单说话人长段（在低能量点切割）
+        merged = self.split_long_segments(merged, audio_data, sample_rate)
+
+        # 5. 按说话人切换点累加，每段不超过 MAX_SEGMENT_SEC
         max_ms = int(settings.MAX_SEGMENT_SEC * 1000)
         chunk_groups: List[List[SpeakerSegment]] = []
         current_group: List[SpeakerSegment] = [merged[0]]
@@ -783,10 +791,7 @@ class SpeakerDiarizer:
         if current_group:
             chunk_groups.append(current_group)
 
-        # 4. 加载音频
-        logger.info("加载音频并构建 ASR 分块...")
-        audio_data, sr = librosa.load(audio_path, sr=self.DEFAULT_SAMPLE_RATE)
-        sample_rate = int(sr)
+        # 6. 为每个 chunk 提取音频、保存临时文件
         output_dir = settings.TEMP_DIR
         os.makedirs(output_dir, exist_ok=True)
 
