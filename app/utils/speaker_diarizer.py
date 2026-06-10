@@ -4,7 +4,9 @@
 基于 CAM++ 的说话人分离，用于多说话人音频分割
 """
 
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 import numpy as np
 import librosa
 import soundfile as sf
