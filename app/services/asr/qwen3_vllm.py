@@ -127,7 +127,7 @@ def _resolve_forced_aligner_gpu_memory_utilization(primary_utilization: float) -
                 override,
             )
 
-    budget_gb = 3.0
+    budget_gb = 5.0
     try:
         import torch
         if torch.cuda.is_available():
