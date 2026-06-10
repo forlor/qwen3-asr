@@ -52,6 +52,28 @@ class SpeakerSegment:
         return self.duration_ms / 1000.0
 
 
+@dataclass
+class AsrChunk:
+    """ASR 分块：包含一段连续音频及其中的说话人片段信息"""
+
+    start_ms: int
+    end_ms: int
+    temp_file: str
+    speaker_turns: List[SpeakerSegment]  # 该时间段内的说话人片段
+
+    @property
+    def start_sec(self) -> float:
+        return self.start_ms / 1000.0
+
+    @property
+    def end_sec(self) -> float:
+        return self.end_ms / 1000.0
+
+    @property
+    def duration_sec(self) -> float:
+        return (self.end_ms - self.start_ms) / 1000.0
+
+
 def _resolve_modelscope_device() -> str:
     """根据配置和硬件自动选择 modelscope pipeline 设备
     """
@@ -708,3 +730,103 @@ class SpeakerDiarizer:
                     os.remove(seg.temp_file)
                 except Exception as e:
                     logger.warning(f"清理临时文件失败: {seg.temp_file}, {e}")
+
+    @staticmethod
+    def cleanup_chunks(chunks: List[AsrChunk]) -> None:
+        """清理 AsrChunk 临时文件"""
+        for chunk in chunks:
+            if chunk.temp_file and os.path.exists(chunk.temp_file):
+                try:
+                    os.remove(chunk.temp_file)
+                except Exception as e:
+                    logger.warning(f"清理临时文件失败: {chunk.temp_file}, {e}")
+
+    def build_asr_chunks(
+        self,
+        audio_path: str,
+        speaker_num: Optional[int] = None,
+    ) -> tuple[List[AsrChunk], List[SpeakerSegment]]:
+        """按说话人切换点构建 ASR 分块
+
+        将相邻说话人片段累加成 ~MAX_SEGMENT_SEC 的大段，
+        只在说话人切换点分段，每段可能包含多个说话人。
+        ASR 识别后再按时间戳匹配回说话人标签。
+
+        Args:
+            audio_path: 音频文件路径
+            speaker_num: 已知说话人数量（可选）
+
+        Returns:
+            (chunks, speaker_turns): ASR 分块列表和原始说话人片段列表
+        """
+        # 1. 执行说话人分离
+        raw_segments = self.diarize(audio_path, speaker_num=speaker_num)
+        if not raw_segments:
+            logger.warning("说话人分离未检测到任何片段")
+            return [], []
+
+        # 2. 合并同一说话人连续片段（避免在说话人内部有微小间隙导致分段过碎）
+        merged = self.merge_consecutive_segments(raw_segments)
+
+        # 3. 按说话人切换点累加，每段不超过 MAX_SEGMENT_SEC
+        max_ms = int(settings.MAX_SEGMENT_SEC * 1000)
+        chunk_groups: List[List[SpeakerSegment]] = []
+        current_group: List[SpeakerSegment] = [merged[0]]
+
+        for seg in merged[1:]:
+            new_duration = seg.end_ms - current_group[0].start_ms
+            if new_duration <= max_ms:
+                current_group.append(seg)
+            else:
+                chunk_groups.append(current_group)
+                current_group = [seg]
+        if current_group:
+            chunk_groups.append(current_group)
+
+        # 4. 加载音频
+        logger.info("加载音频并构建 ASR 分块...")
+        audio_data, sr = librosa.load(audio_path, sr=self.DEFAULT_SAMPLE_RATE)
+        sample_rate = int(sr)
+        output_dir = settings.TEMP_DIR
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 5. 为每个 chunk 提取音频、保存临时文件
+        chunks: List[AsrChunk] = []
+        for group_idx, group in enumerate(chunk_groups):
+            chunk_start_ms = group[0].start_ms
+            chunk_end_ms = group[-1].end_ms
+            start_sample = int(chunk_start_ms / 1000 * sample_rate)
+            end_sample = int(chunk_end_ms / 1000 * sample_rate)
+
+            chunk_audio = audio_data[start_sample:end_sample]
+
+            temp_file = tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".wav",
+                dir=output_dir,
+                prefix=f"chunk_{group_idx:03d}_",
+            )
+            temp_path = temp_file.name
+            temp_file.close()
+
+            sf.write(temp_path, chunk_audio, sample_rate)
+            chunks.append(AsrChunk(
+                start_ms=chunk_start_ms,
+                end_ms=chunk_end_ms,
+                temp_file=temp_path,
+                speaker_turns=group,
+            ))
+
+        # 统计日志
+        unique_speakers = sorted(set(s.speaker_id for s in merged))
+        logger.info(
+            f"ASR 分块完成: {len(merged)} 个说话人片段 → {len(chunks)} 个 ASR 分块, "
+            f"{len(unique_speakers)} 个说话人"
+        )
+        for i, chunk in enumerate(chunks):
+            logger.debug(
+                f"[ASR分块] #{i}: {chunk.start_sec:.2f}-{chunk.end_sec:.2f}s "
+                f"({chunk.duration_sec:.2f}s), {len(chunk.speaker_turns)} 个说话人片段"
+            )
+
+        return chunks, merged

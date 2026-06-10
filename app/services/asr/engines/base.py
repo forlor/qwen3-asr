@@ -26,6 +26,7 @@ class WordToken:
     text: str  # 字词文本
     start_time: float  # 开始时间（秒）
     end_time: float  # 结束时间（秒）
+    speaker_id: Optional[str] = None  # 说话人ID（后置匹配时填充）
 
 
 @dataclass
@@ -146,93 +147,125 @@ class BaseASREngine(ABC):
             duration = get_audio_duration(audio_path)
             logger.info(f"{task_prefix}[transcribe_long_audio] 音频时长: {duration:.2f}秒")
 
-            # 统一使用分段处理
-            speaker_segments = None
+            results: List[ASRSegmentResult] = []
+            all_texts: List[str] = []
+            asr_chunks = None
             audio_segments = None
 
             if enable_speaker_diarization:
-                # 多说话人：使用说话人分离
-                from app.utils.speaker_diarizer import SpeakerDiarizer
+                # 多说话人：使用说话人分离 + ASR 分块
+                from app.utils.speaker_diarizer import SpeakerDiarizer, AsrChunk
 
-                logger.info(f"{task_prefix}使用说话人分离模式")
+                logger.info(f"{task_prefix}使用说话人分离模式（ASR 分块）")
                 diarizer = SpeakerDiarizer()
-                speaker_segments = diarizer.split_audio_by_speakers(audio_path, speaker_num=speaker_num)
+                asr_chunks, speaker_turns = diarizer.build_asr_chunks(
+                    audio_path, speaker_num=speaker_num
+                )
 
-                if not speaker_segments:
+                if not asr_chunks:
                     logger.warning(f"{task_prefix}说话人分离未检测到片段，fallback 到 VAD 分割")
 
-            if not speaker_segments:
+            if not asr_chunks:
                 # 单说话人：使用 VAD 分割
                 logger.info(f"{task_prefix}使用 VAD 分割模式")
                 splitter = AudioSplitter(device=self.device)
                 audio_segments = splitter.split_audio_file(audio_path)
 
-            # 选择要处理的片段
-            segments_to_process = speaker_segments if speaker_segments else audio_segments
-            if not segments_to_process:
-                raise DefaultServerErrorException("音频分割失败：未生成任何片段")
+            if asr_chunks:
+                # ============ 说话人分离模式：按 chunk ASR，后置匹配说话人 ============
+                logger.info(f"{task_prefix}ASR 分块数: {len(asr_chunks)}")
 
-            logger.info(f"{task_prefix}音频已分割为 {len(segments_to_process)} 段")
-
-            results: List[ASRSegmentResult] = []
-            all_texts: List[str] = []
-
-            # 使用批处理推理
-            batch_size = settings.ASR_BATCH_SIZE
-            logger.info(
-                f"{task_prefix}使用批处理推理，batch_size={batch_size}, "
-                f"word_timestamps={word_timestamps}"
-            )
-
-            for batch_start in range(0, len(segments_to_process), batch_size):
-                batch_end = min(batch_start + batch_size, len(segments_to_process))
-                batch_segments = segments_to_process[batch_start:batch_end]
-
-                logger.info(
-                    f"{task_prefix}推理批次 "
-                    f"{batch_start//batch_size + 1}/{(len(segments_to_process) + batch_size - 1)//batch_size}: "
-                    f"片段 {batch_start+1}-{batch_end}/{len(segments_to_process)}"
-                )
-
-                try:
-                    # 批量推理，支持时间戳
-                    batch_results = self._transcribe_batch(
-                        segments=batch_segments,
-                        hotwords=hotwords,
-                        enable_punctuation=enable_punctuation,
-                        enable_itn=enable_itn,
-                        sample_rate=sample_rate,
-                        word_timestamps=word_timestamps,
+                for chunk_idx, chunk in enumerate(asr_chunks):
+                    logger.info(
+                        f"{task_prefix}ASR 分块 {chunk_idx + 1}/{len(asr_chunks)}: "
+                        f"{chunk.start_sec:.2f}-{chunk.end_sec:.2f}s ({chunk.duration_sec:.2f}s)"
                     )
 
-                    for seg, result in zip(batch_segments, batch_results):
-                        if result and result.text:
-                            start_sec = float(getattr(seg, "start_sec", 0.0))
-                            end_sec = float(getattr(seg, "end_sec", start_sec))
+                    try:
+                        # 强制 word_timestamps=True 以便匹配说话人
+                        batch_results = self._transcribe_batch(
+                            segments=[chunk],
+                            hotwords=hotwords,
+                            enable_punctuation=enable_punctuation,
+                            enable_itn=enable_itn,
+                            sample_rate=sample_rate,
+                            word_timestamps=True,
+                        )
+
+                        result = batch_results[0] if batch_results else None
+                        if not result or not result.text:
+                            continue
+
+                        # 用 word 时间戳匹配说话人
+                        if result.word_tokens:
+                            self._assign_speakers_to_words(
+                                result.word_tokens, chunk.start_sec, chunk.speaker_turns
+                            )
+                            # 按说话人拆分为多个 segment
+                            split_segs = self._split_by_speaker(
+                                result.word_tokens, chunk.start_sec
+                            )
+                            results.extend(split_segs)
+                            all_texts.extend(s.text for s in split_segs)
+                        else:
+                            # 没有字级时间戳，整段用主导说话人
+                            dominant = self._get_dominant_speaker(
+                                chunk.start_sec, chunk.end_sec, chunk.speaker_turns
+                            )
                             results.append(
                                 ASRSegmentResult(
                                     text=result.text,
-                                    start_time=start_sec,
-                                    end_time=end_sec,
-                                    speaker_id=getattr(seg, "speaker_id", None),
-                                    word_tokens=result.word_tokens if word_timestamps else None,
+                                    start_time=chunk.start_sec,
+                                    end_time=chunk.end_sec,
+                                    speaker_id=dominant,
                                 )
                             )
                             all_texts.append(result.text)
 
-                    logger.info(
-                        f"{task_prefix}批次推理完成，有效片段: "
-                        f"{len([r for r in batch_results if r and r.text])}"
-                    )
+                    except Exception as e:
+                        logger.error(f"{task_prefix}ASR 分块 {chunk_idx + 1} 推理失败: {e}")
 
-                except Exception as e:
-                    logger.error(f"{task_prefix}批次推理失败: {e}, 跳过该批次")
+            elif audio_segments:
+                # ============ VAD 分割模式：保持原有逻辑 ============
+                logger.info(f"{task_prefix}音频已分割为 {len(audio_segments)} 段")
 
-            # 清理临时文件（独立清理，避免条件遗漏）
+                batch_size = settings.ASR_BATCH_SIZE
+                for batch_start in range(0, len(audio_segments), batch_size):
+                    batch_end = min(batch_start + batch_size, len(audio_segments))
+                    batch_segments = audio_segments[batch_start:batch_end]
+
+                    try:
+                        batch_results = self._transcribe_batch(
+                            segments=batch_segments,
+                            hotwords=hotwords,
+                            enable_punctuation=enable_punctuation,
+                            enable_itn=enable_itn,
+                            sample_rate=sample_rate,
+                            word_timestamps=word_timestamps,
+                        )
+
+                        for seg, result in zip(batch_segments, batch_results):
+                            if result and result.text:
+                                results.append(
+                                    ASRSegmentResult(
+                                        text=result.text,
+                                        start_time=float(seg.start_sec),
+                                        end_time=float(seg.end_sec),
+                                        word_tokens=result.word_tokens if word_timestamps else None,
+                                    )
+                                )
+                                all_texts.append(result.text)
+
+                    except Exception as e:
+                        logger.error(f"{task_prefix}批次推理失败: {e}, 跳过该批次")
+            else:
+                raise DefaultServerErrorException("音频分割失败：未生成任何片段")
+
+            # 清理临时文件
             try:
-                if speaker_segments:
+                if asr_chunks:
                     from app.utils.speaker_diarizer import SpeakerDiarizer
-                    SpeakerDiarizer.cleanup_segments(speaker_segments)
+                    SpeakerDiarizer.cleanup_chunks(asr_chunks)
                 if audio_segments:
                     AudioSplitter.cleanup_segments(audio_segments)
             except Exception as e:
@@ -314,7 +347,86 @@ class BaseASREngine(ABC):
         """获取设备信息"""
         pass
 
-    @property
+    @staticmethod
+    def _assign_speakers_to_words(
+        word_tokens: List["WordToken"],
+        chunk_start_sec: float,
+        speaker_turns: list,
+    ) -> None:
+        """将 word 时间戳（相对 chunk）转为绝对时间并匹配说话人"""
+        for word in word_tokens:
+            abs_start = word.start_time + chunk_start_sec
+            abs_end = word.end_time + chunk_start_sec
+            abs_mid = (abs_start + abs_end) / 2.0
+            for turn in speaker_turns:
+                if turn.start_sec <= abs_mid <= turn.end_sec:
+                    word.speaker_id = turn.speaker_id  # type: ignore[attr-defined]
+                    break
+            # 恢复为绝对时间（后续 timestamp_scale 会统一缩放）
+            word.start_time = abs_start
+            word.end_time = abs_end
+
+    @staticmethod
+    def _split_by_speaker(
+        word_tokens: List["WordToken"],
+        chunk_start_sec: float,
+    ) -> List[ASRSegmentResult]:
+        """按说话人切换拆分 word 列表为多个 ASRSegmentResult"""
+        if not word_tokens:
+            return []
+
+        results: List[ASRSegmentResult] = []
+        current_speaker = getattr(word_tokens[0], "speaker_id", None)
+        current_words: List["WordToken"] = [word_tokens[0]]
+
+        for word in word_tokens[1:]:
+            speaker = getattr(word, "speaker_id", None)
+            if speaker == current_speaker:
+                current_words.append(word)
+            else:
+                results.append(
+                    ASRSegmentResult(
+                        text="".join(w.text for w in current_words),
+                        start_time=current_words[0].start_time,
+                        end_time=current_words[-1].end_time,
+                        speaker_id=current_speaker,
+                        word_tokens=current_words if len(current_words) > 1 else None,
+                    )
+                )
+                current_speaker = speaker
+                current_words = [word]
+
+        # 最后一段
+        if current_words:
+            results.append(
+                ASRSegmentResult(
+                    text="".join(w.text for w in current_words),
+                    start_time=current_words[0].start_time,
+                    end_time=current_words[-1].end_time,
+                    speaker_id=current_speaker,
+                    word_tokens=current_words if len(current_words) > 1 else None,
+                )
+            )
+        return results
+
+    @staticmethod
+    def _get_dominant_speaker(
+        start_sec: float, end_sec: float, speaker_turns: list
+    ) -> Optional[str]:
+        """获取时间区间内占比最大的说话人"""
+        if not speaker_turns:
+            return None
+        overlap: dict[str, float] = {}
+        for turn in speaker_turns:
+            overlap_start = max(start_sec, turn.start_sec)
+            overlap_end = min(end_sec, turn.end_sec)
+            if overlap_end > overlap_start:
+                sid = turn.speaker_id
+                overlap[sid] = overlap.get(sid, 0.0) + (overlap_end - overlap_start)
+        if not overlap:
+            return speaker_turns[0].speaker_id
+        return max(overlap, key=overlap.get)
+
     @abstractmethod
     def supports_realtime(self) -> bool:
         """是否支持实时识别"""
