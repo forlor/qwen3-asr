@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 ASR引擎基础模块
 包含抽象基类和数据类定义
@@ -385,6 +385,47 @@ class BaseASREngine(ABC):
             word.speaker_id = best_speaker
             word.start_time = abs_start
             word.end_time = abs_end
+
+        # 1.5 基于强标点的边界吸附 (Punctuation-based Boundary Snap)
+        # 很多时候 VAD 换人点发生在句子中间，导致名字被切断（例如 "叫什么名字？李", "云环。"）
+        # 强标点（。！？）是对话交替的绝佳信号。如果说话人切换点附近有强标点，
+        # 我们就把切换点对齐到强标点处。
+        PUNCTUATION_CHARS = set('。！？.?!')
+        SEARCH_WINDOW = 4  # 在切换点前后几个词内寻找强标点
+        
+        switch_points = []
+        for i in range(len(word_tokens) - 1):
+            if word_tokens[i].speaker_id != word_tokens[i+1].speaker_id:
+                switch_points.append(i)
+
+        for i in switch_points:
+            # 当前切换点 word_tokens[i] 结束，word_tokens[i+1] 开始新的 speaker
+            # 检查当前切分点是否已经完美在一个强标点之后
+            if any(p in word_tokens[i].text for p in PUNCTUATION_CHARS):
+                continue
+                
+            # 在附近寻找最近的强标点
+            best_punct_idx = -1
+            min_dist = 999
+            start_idx = max(0, i - SEARCH_WINDOW)
+            end_idx = min(len(word_tokens) - 2, i + SEARCH_WINDOW)
+            
+            for j in range(start_idx, end_idx + 1):
+                if any(p in word_tokens[j].text for p in PUNCTUATION_CHARS):
+                    dist = abs(j - i)
+                    if dist < min_dist:
+                        min_dist = dist
+                        best_punct_idx = j
+            
+            if best_punct_idx != -1 and best_punct_idx != i:
+                if best_punct_idx > i:
+                    # 标点在右边，说明中间这些词（前一个人没说完的尾巴）属于左边的说话人
+                    for k in range(i + 1, best_punct_idx + 1):
+                        word_tokens[k].speaker_id = word_tokens[i].speaker_id
+                else:
+                    # 标点在左边，说明中间这些词（后一个人提前开口的字）属于右边的说话人
+                    for k in range(best_punct_idx + 1, i + 1):
+                        word_tokens[k].speaker_id = word_tokens[i+1].speaker_id
 
         # 2. 保守的孤岛消除 (Conservative Island Removal)
         # 如果某个说话人只"插嘴"了极短的 1~3 个字，且前后都是同一个说话人，
