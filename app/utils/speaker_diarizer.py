@@ -278,7 +278,7 @@ class SpeakerDiarizer:
 
             logger.info(f"开始说话人分离: {audio_path}")
             with _diarization_inference_semaphore:
-                result = pipeline(audio_path)
+                result = pipeline(audio_path, merge_thr=0.90)
 
             # 解析结果: {'text': [[start, end, speaker_id], ...]}
             # pipeline 返回类型不确定，需要安全地获取 'text' 字段
