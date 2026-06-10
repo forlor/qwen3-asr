@@ -609,10 +609,7 @@ class SpeakerDiarizer:
 
         if len(split_segments) != len(segments):
             logger.info(
-                "Split long speaker segments by low energy: {} -> {}, max={}s",
-                len(segments),
-                len(split_segments),
-                settings.MAX_SEGMENT_SEC,
+                f"Split long speaker segments by low energy: {len(segments)} -> {len(split_segments)}, max={settings.MAX_SEGMENT_SEC}s",
             )
         return split_segments
 
