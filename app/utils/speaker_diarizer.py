@@ -761,13 +761,13 @@ class SpeakerDiarizer:
             logger.warning("说话人分离未检测到任何片段")
             return [], []
 
-        # 2. 合并同一说话人连续片段（避免在说话人内部有微小间隙导致分段过碎）
-        merged = self.merge_consecutive_segments(raw_segments)
-
-        # 3. 加载音频，用于拆分超长片段
+        # 2. 加载音频（提前加载，后续 diarize/merge/split 复用）
         logger.info("加载音频并构建 ASR 分块...")
         audio_data, sr = librosa.load(audio_path, sr=self.DEFAULT_SAMPLE_RATE)
         sample_rate = int(sr)
+
+        # 3. 合并同一说话人连续片段（避免在说话人内部有微小间隙导致分段过碎）
+        merged = self.merge_consecutive_segments(raw_segments)
 
         # 4. 拆分超过 MAX_SEGMENT_SEC 的单说话人长段（在低能量点切割）
         merged = self.split_long_segments(merged, audio_data, sample_rate)
@@ -791,44 +791,53 @@ class SpeakerDiarizer:
         output_dir = settings.TEMP_DIR
         os.makedirs(output_dir, exist_ok=True)
 
-        # 7. 为每个 chunk 提取音频、保存临时文件
         chunks: List[AsrChunk] = []
-        for group_idx, group in enumerate(chunk_groups):
-            chunk_start_ms = group[0].start_ms
-            chunk_end_ms = group[-1].end_ms
-            start_sample = int(chunk_start_ms / 1000 * sample_rate)
-            end_sample = int(chunk_end_ms / 1000 * sample_rate)
+        try:
+            for group_idx, group in enumerate(chunk_groups):
+                chunk_start_ms = group[0].start_ms
+                chunk_end_ms = group[-1].end_ms
+                start_sample = int(chunk_start_ms / 1000 * sample_rate)
+                end_sample = int(chunk_end_ms / 1000 * sample_rate)
 
-            chunk_audio = audio_data[start_sample:end_sample]
+                chunk_audio = audio_data[start_sample:end_sample]
 
-            # 短 chunk 静音填充：不足 MIN_OUTPUT_SEC 则前后补静音
-            min_samples = int(self.MIN_OUTPUT_SEC * sample_rate)
-            if len(chunk_audio) < min_samples:
-                shortfall = min_samples - len(chunk_audio)
-                pad_before = shortfall // 2
-                pad_after = shortfall - pad_before
-                chunk_audio = np.concatenate([
-                    np.zeros(pad_before, dtype=np.float32),
-                    chunk_audio,
-                    np.zeros(pad_after, dtype=np.float32),
-                ])
+                # 短 chunk 静音填充：不足 MIN_OUTPUT_SEC 则前后补静音
+                min_samples = int(self.MIN_OUTPUT_SEC * sample_rate)
+                if len(chunk_audio) < min_samples:
+                    shortfall = min_samples - len(chunk_audio)
+                    pad_before = shortfall // 2
+                    pad_after = shortfall - pad_before
+                    chunk_audio = np.concatenate([
+                        np.zeros(pad_before, dtype=np.float32),
+                        chunk_audio,
+                        np.zeros(pad_after, dtype=np.float32),
+                    ])
 
-            temp_file = tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".wav",
-                dir=output_dir,
-                prefix=f"chunk_{group_idx:03d}_",
-            )
-            temp_path = temp_file.name
-            temp_file.close()
+                temp_file = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=".wav",
+                    dir=output_dir,
+                    prefix=f"chunk_{group_idx:03d}_",
+                )
+                temp_path = temp_file.name
+                temp_file.close()
 
-            sf.write(temp_path, chunk_audio, sample_rate)
-            chunks.append(AsrChunk(
-                start_ms=chunk_start_ms,
-                end_ms=chunk_end_ms,
-                temp_file=temp_path,
-                speaker_turns=group,
-            ))
+                sf.write(temp_path, chunk_audio, sample_rate)
+                chunks.append(AsrChunk(
+                    start_ms=chunk_start_ms,
+                    end_ms=chunk_end_ms,
+                    temp_file=temp_path,
+                    speaker_turns=group,
+                ))
+        except Exception:
+            # 清理已创建的临时文件，避免泄漏
+            for chunk in chunks:
+                if chunk.temp_file and os.path.exists(chunk.temp_file):
+                    try:
+                        os.remove(chunk.temp_file)
+                    except Exception:
+                        pass
+            raise
 
         # 统计日志
         unique_speakers = sorted(set(s.speaker_id for s in merged))

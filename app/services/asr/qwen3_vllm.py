@@ -134,6 +134,12 @@ def _resolve_forced_aligner_gpu_memory_utilization(primary_utilization: float) -
             total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             # 基于主模型占用后的剩余显存计算，避免两个 vLLM 实例争抢 OOM
             remaining_gb = total_vram_gb * (1.0 - primary_utilization)
+            if remaining_gb <= 0:
+                logger.warning(
+                    "Forced aligner: no remaining VRAM (primary_util=%.2f), falling back",
+                    primary_utilization,
+                )
+                return primary_utilization
             computed = budget_gb / remaining_gb
             computed = min(computed, 0.90)
             logger.info(

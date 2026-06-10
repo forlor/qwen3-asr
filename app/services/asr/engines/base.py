@@ -149,8 +149,8 @@ class BaseASREngine(ABC):
 
             results: List[ASRSegmentResult] = []
             all_texts: List[str] = []
-            asr_chunks = None
-            audio_segments = None
+            segments_to_process = None
+            speaker_mode = False
 
             if enable_speaker_diarization:
                 # 多说话人：使用说话人分离 + ASR 分块
@@ -162,116 +162,102 @@ class BaseASREngine(ABC):
                     audio_path, speaker_num=speaker_num
                 )
 
-                if not asr_chunks:
+                if asr_chunks:
+                    segments_to_process = asr_chunks
+                    speaker_mode = True
+                    logger.info(f"{task_prefix}ASR 分块数: {len(asr_chunks)}")
+                else:
                     logger.warning(f"{task_prefix}说话人分离未检测到片段，fallback 到 VAD 分割")
 
-            if not asr_chunks:
+            if not segments_to_process:
                 # 单说话人：使用 VAD 分割
                 logger.info(f"{task_prefix}使用 VAD 分割模式")
                 splitter = AudioSplitter(device=self.device)
-                audio_segments = splitter.split_audio_file(audio_path)
+                segments_to_process = splitter.split_audio_file(audio_path)
+                logger.info(f"{task_prefix}音频已分割为 {len(segments_to_process)} 段")
 
-            if asr_chunks:
-                # ============ 说话人分离模式：按 batch ASR，后置匹配说话人 ============
-                logger.info(f"{task_prefix}ASR 分块数: {len(asr_chunks)}")
-
-                batch_size = settings.ASR_BATCH_SIZE
-                for batch_start in range(0, len(asr_chunks), batch_size):
-                    batch_end = min(batch_start + batch_size, len(asr_chunks))
-                    batch_chunks = asr_chunks[batch_start:batch_end]
-
-                    for i, c in enumerate(batch_chunks):
-                        logger.info(
-                            f"{task_prefix}ASR 分块 {batch_start + i + 1}/{len(asr_chunks)}: "
-                            f"{c.start_sec:.2f}-{c.end_sec:.2f}s ({c.duration_sec:.2f}s)"
-                        )
-
-                    try:
-                        batch_results = self._transcribe_batch(
-                            segments=batch_chunks,
-                            hotwords=hotwords,
-                            enable_punctuation=enable_punctuation,
-                            enable_itn=enable_itn,
-                            sample_rate=sample_rate,
-                            word_timestamps=True,
-                        )
-
-                        for chunk, result in zip(batch_chunks, batch_results):
-                            if not result or not result.text:
-                                continue
-
-                            if result.word_tokens:
-                                self._assign_speakers_to_words(
-                                    result.word_tokens, chunk.start_sec, chunk.speaker_turns
-                                )
-                                split_segs = self._split_by_speaker(
-                                    result.word_tokens
-                                )
-                                if not word_timestamps:
-                                    for seg in split_segs:
-                                        seg.word_tokens = None
-                                results.extend(split_segs)
-                                all_texts.extend(s.text for s in split_segs)
-                            else:
-                                dominant = self._get_dominant_speaker(
-                                    chunk.start_sec, chunk.end_sec, chunk.speaker_turns
-                                )
-                                results.append(
-                                    ASRSegmentResult(
-                                        text=result.text,
-                                        start_time=chunk.start_sec,
-                                        end_time=chunk.end_sec,
-                                        speaker_id=dominant,
-                                    )
-                                )
-                                all_texts.append(result.text)
-
-                    except Exception as e:
-                        logger.error(f"{task_prefix}ASR 分块 {batch_start + 1}-{batch_end} 推理失败: {e}")
-
-            elif audio_segments:
-                # ============ VAD 分割模式：保持原有逻辑 ============
-                logger.info(f"{task_prefix}音频已分割为 {len(audio_segments)} 段")
-
-                batch_size = settings.ASR_BATCH_SIZE
-                for batch_start in range(0, len(audio_segments), batch_size):
-                    batch_end = min(batch_start + batch_size, len(audio_segments))
-                    batch_segments = audio_segments[batch_start:batch_end]
-
-                    try:
-                        batch_results = self._transcribe_batch(
-                            segments=batch_segments,
-                            hotwords=hotwords,
-                            enable_punctuation=enable_punctuation,
-                            enable_itn=enable_itn,
-                            sample_rate=sample_rate,
-                            word_timestamps=word_timestamps,
-                        )
-
-                        for seg, result in zip(batch_segments, batch_results):
-                            if result and result.text:
-                                results.append(
-                                    ASRSegmentResult(
-                                        text=result.text,
-                                        start_time=float(seg.start_sec),
-                                        end_time=float(seg.end_sec),
-                                        word_tokens=result.word_tokens if word_timestamps else None,
-                                    )
-                                )
-                                all_texts.append(result.text)
-
-                    except Exception as e:
-                        logger.error(f"{task_prefix}批次推理失败: {e}, 跳过该批次")
-            else:
+            if not segments_to_process:
                 raise DefaultServerErrorException("音频分割失败：未生成任何片段")
+
+            # 统一批处理推理
+            batch_size = settings.ASR_BATCH_SIZE
+            logger.info(
+                f"{task_prefix}批处理推理: {len(segments_to_process)} 段, "
+                f"batch_size={batch_size}, speaker_mode={speaker_mode}"
+            )
+
+            for batch_start in range(0, len(segments_to_process), batch_size):
+                batch_end = min(batch_start + batch_size, len(segments_to_process))
+                batch_segs = segments_to_process[batch_start:batch_end]
+
+                for i, seg in enumerate(batch_segs):
+                    logger.debug(
+                        f"{task_prefix}片段 {batch_start + i + 1}/{len(segments_to_process)}: "
+                        f"{float(seg.start_sec):.2f}-{float(seg.end_sec):.2f}s"
+                    )
+
+                try:
+                    batch_results = self._transcribe_batch(
+                        segments=batch_segs,
+                        hotwords=hotwords,
+                        enable_punctuation=enable_punctuation,
+                        enable_itn=enable_itn,
+                        sample_rate=sample_rate,
+                        word_timestamps=True if speaker_mode else word_timestamps,
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"{task_prefix}批次 {batch_start + 1}-{batch_end} 推理失败: {e}"
+                    )
+                    raise DefaultServerErrorException(
+                        f"ASR 推理失败（批次 {batch_start + 1}-{batch_end}）: {e}"
+                    )
+
+                for seg, result in zip(batch_segs, batch_results):
+                    if not result or not result.text:
+                        continue
+
+                    if speaker_mode and result.word_tokens:
+                        self._assign_speakers_to_words(
+                            result.word_tokens, seg.start_sec, seg.speaker_turns
+                        )
+                        split_segs = self._split_by_speaker(result.word_tokens)
+                        if not word_timestamps:
+                            for s in split_segs:
+                                s.word_tokens = None
+                        results.extend(split_segs)
+                        all_texts.extend(s.text for s in split_segs)
+                    elif speaker_mode:
+                        dominant = self._get_dominant_speaker(
+                            seg.start_sec, seg.end_sec, seg.speaker_turns
+                        )
+                        results.append(
+                            ASRSegmentResult(
+                                text=result.text,
+                                start_time=seg.start_sec,
+                                end_time=seg.end_sec,
+                                speaker_id=dominant,
+                            )
+                        )
+                        all_texts.append(result.text)
+                    else:
+                        results.append(
+                            ASRSegmentResult(
+                                text=result.text,
+                                start_time=float(seg.start_sec),
+                                end_time=float(seg.end_sec),
+                                word_tokens=result.word_tokens if word_timestamps else None,
+                            )
+                        )
+                        all_texts.append(result.text)
 
             # 清理临时文件
             try:
-                if asr_chunks:
+                if speaker_mode:
                     from app.utils.speaker_diarizer import SpeakerDiarizer
-                    SpeakerDiarizer.cleanup_chunks(asr_chunks)
-                if audio_segments:
-                    AudioSplitter.cleanup_segments(audio_segments)
+                    SpeakerDiarizer.cleanup_chunks(segments_to_process)
+                else:
+                    AudioSplitter.cleanup_segments(segments_to_process)
             except Exception as e:
                 logger.warning(f"清理临时文件时出错: {e}")
 
