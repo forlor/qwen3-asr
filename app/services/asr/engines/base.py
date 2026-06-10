@@ -172,19 +172,23 @@ class BaseASREngine(ABC):
                 audio_segments = splitter.split_audio_file(audio_path)
 
             if asr_chunks:
-                # ============ 说话人分离模式：按 chunk ASR，后置匹配说话人 ============
+                # ============ 说话人分离模式：按 batch ASR，后置匹配说话人 ============
                 logger.info(f"{task_prefix}ASR 分块数: {len(asr_chunks)}")
 
-                for chunk_idx, chunk in enumerate(asr_chunks):
-                    logger.info(
-                        f"{task_prefix}ASR 分块 {chunk_idx + 1}/{len(asr_chunks)}: "
-                        f"{chunk.start_sec:.2f}-{chunk.end_sec:.2f}s ({chunk.duration_sec:.2f}s)"
-                    )
+                batch_size = settings.ASR_BATCH_SIZE
+                for batch_start in range(0, len(asr_chunks), batch_size):
+                    batch_end = min(batch_start + batch_size, len(asr_chunks))
+                    batch_chunks = asr_chunks[batch_start:batch_end]
+
+                    for i, c in enumerate(batch_chunks):
+                        logger.info(
+                            f"{task_prefix}ASR 分块 {batch_start + i + 1}/{len(asr_chunks)}: "
+                            f"{c.start_sec:.2f}-{c.end_sec:.2f}s ({c.duration_sec:.2f}s)"
+                        )
 
                     try:
-                        # 强制 word_timestamps=True 以便匹配说话人
                         batch_results = self._transcribe_batch(
-                            segments=[chunk],
+                            segments=batch_chunks,
                             hotwords=hotwords,
                             enable_punctuation=enable_punctuation,
                             enable_itn=enable_itn,
@@ -192,42 +196,38 @@ class BaseASREngine(ABC):
                             word_timestamps=True,
                         )
 
-                        result = batch_results[0] if batch_results else None
-                        if not result or not result.text:
-                            continue
+                        for chunk, result in zip(batch_chunks, batch_results):
+                            if not result or not result.text:
+                                continue
 
-                        # 用 word 时间戳匹配说话人
-                        if result.word_tokens:
-                            self._assign_speakers_to_words(
-                                result.word_tokens, chunk.start_sec, chunk.speaker_turns
-                            )
-                            # 按说话人拆分为多个 segment
-                            split_segs = self._split_by_speaker(
-                                result.word_tokens
-                            )
-                            # 按用户原始参数决定是否保留 word_tokens
-                            if not word_timestamps:
-                                for seg in split_segs:
-                                    seg.word_tokens = None
-                            results.extend(split_segs)
-                            all_texts.extend(s.text for s in split_segs)
-                        else:
-                            # 没有字级时间戳，整段用主导说话人
-                            dominant = self._get_dominant_speaker(
-                                chunk.start_sec, chunk.end_sec, chunk.speaker_turns
-                            )
-                            results.append(
-                                ASRSegmentResult(
-                                    text=result.text,
-                                    start_time=chunk.start_sec,
-                                    end_time=chunk.end_sec,
-                                    speaker_id=dominant,
+                            if result.word_tokens:
+                                self._assign_speakers_to_words(
+                                    result.word_tokens, chunk.start_sec, chunk.speaker_turns
                                 )
-                            )
-                            all_texts.append(result.text)
+                                split_segs = self._split_by_speaker(
+                                    result.word_tokens
+                                )
+                                if not word_timestamps:
+                                    for seg in split_segs:
+                                        seg.word_tokens = None
+                                results.extend(split_segs)
+                                all_texts.extend(s.text for s in split_segs)
+                            else:
+                                dominant = self._get_dominant_speaker(
+                                    chunk.start_sec, chunk.end_sec, chunk.speaker_turns
+                                )
+                                results.append(
+                                    ASRSegmentResult(
+                                        text=result.text,
+                                        start_time=chunk.start_sec,
+                                        end_time=chunk.end_sec,
+                                        speaker_id=dominant,
+                                    )
+                                )
+                                all_texts.append(result.text)
 
                     except Exception as e:
-                        logger.error(f"{task_prefix}ASR 分块 {chunk_idx + 1} 推理失败: {e}")
+                        logger.error(f"{task_prefix}ASR 分块 {batch_start + 1}-{batch_end} 推理失败: {e}")
 
             elif audio_segments:
                 # ============ VAD 分割模式：保持原有逻辑 ============
