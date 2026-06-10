@@ -132,14 +132,18 @@ def _resolve_forced_aligner_gpu_memory_utilization(primary_utilization: float) -
         import torch
         if torch.cuda.is_available():
             total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            computed = budget_gb / total_vram_gb
+            # 基于主模型占用后的剩余显存计算，避免两个 vLLM 实例争抢 OOM
+            remaining_gb = total_vram_gb * (1.0 - primary_utilization)
+            computed = budget_gb / remaining_gb
+            computed = min(computed, 0.90)
             logger.info(
-                "Forced aligner memory: budget=%.1fGB, total_vram=%.1fGB, utilization=%.2f",
-                budget_gb, total_vram_gb, computed,
+                "Forced aligner memory: budget=%.1fGB, total_vram=%.1fGB, "
+                "primary_util=%.2f, remaining=%.1fGB, utilization=%.2f",
+                budget_gb, total_vram_gb, primary_utilization, remaining_gb, computed,
             )
-            return round(min(computed, 0.95), 2)
+            return round(computed, 2)
     except Exception:
-        pass
+        logger.warning("Failed to compute forced aligner memory, falling back to primary=%.2f", primary_utilization)
     return primary_utilization
 
 
