@@ -277,7 +277,7 @@ class SpeakerDiarizer:
         try:
             pipeline = get_global_diarization_pipeline()
 
-            pipeline_kwargs = {"merge_thr": 0.95}
+            pipeline_kwargs = {"merge_thr": 0.90}
             if speaker_num is not None and speaker_num > 0:
                 pipeline_kwargs["oracle_num"] = speaker_num
 
