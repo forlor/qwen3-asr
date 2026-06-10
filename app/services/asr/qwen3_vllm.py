@@ -259,7 +259,7 @@ class Qwen3VLLMBackend:
                 runner="pooling",
                 enforce_eager=True,
                 gpu_memory_utilization=forced_aligner_gpu_memory_utilization,
-                max_model_len=1024,
+                max_model_len=2048,
                 hf_overrides={
                     "architectures": ["Qwen3ASRForcedAlignerForTokenClassification"],
                 },
