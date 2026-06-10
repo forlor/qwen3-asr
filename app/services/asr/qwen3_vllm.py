@@ -336,15 +336,20 @@ class Qwen3VLLMBackend:
                 segments=[ASRSegmentResult(text=text, start_time=0.0, end_time=0.0)] if text else [],
             )
 
-        aligned = self.align_transcript(audio_path=audio_path, text=text, language=language, audio=audio)
-        word_tokens = [
-            WordToken(
-                text=str(item["text"]),
-                start_time=round(float(item["start_ms"]) / 1000.0, 3),
-                end_time=round(float(item["end_ms"]) / 1000.0, 3),
-            )
-            for item in aligned
-        ]
+        try:
+            aligned = self.align_transcript(audio_path=audio_path, text=text, language=language, audio=audio)
+            word_tokens = [
+                WordToken(
+                    text=str(item["text"]),
+                    start_time=round(float(item["start_ms"]) / 1000.0, 3),
+                    end_time=round(float(item["end_ms"]) / 1000.0, 3),
+                )
+                for item in aligned
+            ]
+        except Exception as e:
+            logger.warning("Failed to align transcript for raw %s: %s", audio_path, e)
+            word_tokens = []
+
         if not word_tokens:
             return ASRRawResult(
                 text=text,
@@ -380,20 +385,25 @@ class Qwen3VLLMBackend:
                 if not word_timestamps:
                     results.append(ASRSegmentResult(text=text, start_time=0.0, end_time=0.0))
                     continue
-                aligned = self.align_transcript(
-                    audio_path=audio_path,
-                    text=text,
-                    language=language,
-                    audio=audio,
-                )
-                word_tokens = [
-                    WordToken(
-                        text=str(item["text"]),
-                        start_time=round(float(item["start_ms"]) / 1000.0, 3),
-                        end_time=round(float(item["end_ms"]) / 1000.0, 3),
+                try:
+                    aligned = self.align_transcript(
+                        audio_path=audio_path,
+                        text=text,
+                        language=language,
+                        audio=audio,
                     )
-                    for item in aligned
-                ]
+                    word_tokens = [
+                        WordToken(
+                            text=str(item["text"]),
+                            start_time=round(float(item["start_ms"]) / 1000.0, 3),
+                            end_time=round(float(item["end_ms"]) / 1000.0, 3),
+                        )
+                        for item in aligned
+                    ]
+                except Exception as e:
+                    logger.warning("Failed to align transcript for %s: %s", audio_path, e)
+                    word_tokens = []
+
                 results.append(
                     ASRSegmentResult(
                         text=text,

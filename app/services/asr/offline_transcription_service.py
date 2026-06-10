@@ -16,6 +16,7 @@ from app.services.asr.engines import ASRFullResult
 from app.services.asr.model_selection import get_default_offline_model_id
 from app.services.asr.runtime import OfflineASRRequest, get_runtime_router
 from app.services.audio import get_audio_service
+from app.core.executor import run_sync
 
 
 logger = logging.getLogger(__name__)
@@ -153,7 +154,8 @@ class OfflineTranscriptionService:
         )
 
         # 音频质量评估（在推理完成后、清理临时文件前执行）
-        quality = _assess_audio_quality(
+        quality = await run_sync(
+            _assess_audio_quality,
             prepared_audio.normalized_path,
             task_id=options.task_id,
         )
