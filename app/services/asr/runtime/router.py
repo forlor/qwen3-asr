@@ -39,6 +39,7 @@ class OfflineASRRequest:
     word_timestamps: bool = False
     timestamp_scale: float = 1.0
     task_id: Optional[str] = None
+    speaker_num: Optional[int] = None
 
 
 class RuntimeEngineLease:
@@ -192,6 +193,7 @@ class RuntimeRouter:
                 word_timestamps=request.word_timestamps,
                 timestamp_scale=request.timestamp_scale,
                 task_id=request.task_id,
+                speaker_num=request.speaker_num,
             )
 
 

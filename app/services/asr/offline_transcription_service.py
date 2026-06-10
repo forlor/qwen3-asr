@@ -79,6 +79,7 @@ class OfflineTranscriptionOptions:
     enable_speaker_diarization: bool = True
     word_timestamps: bool = False
     task_id: Optional[str] = None
+    speaker_num: Optional[int] = None
 
 
 class OfflineTranscriptionService:
@@ -147,6 +148,7 @@ class OfflineTranscriptionService:
                 word_timestamps=options.word_timestamps,
                 timestamp_scale=prepared_audio.timestamp_scale,
                 task_id=options.task_id,
+                speaker_num=options.speaker_num,
             )
         )
 

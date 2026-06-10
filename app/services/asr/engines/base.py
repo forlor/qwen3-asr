@@ -109,6 +109,7 @@ class BaseASREngine(ABC):
         word_timestamps: bool = False,
         timestamp_scale: float = 1.0,
         task_id: Optional[str] = None,
+        speaker_num: Optional[int] = None,
     ) -> ASRFullResult:
         """转录长音频文件（自动分段）
 
@@ -122,6 +123,7 @@ class BaseASREngine(ABC):
             word_timestamps: 是否返回字词级时间戳（仅部分模型支持）
             timestamp_scale: Timestamp correction factor from audio normalization.
             task_id: 任务ID（用于日志追踪）
+            speaker_num: 已知说话人数量（可选，不传则自动检测）
 
         Returns:
             ASRFullResult: 包含完整文本、分段结果和时长的结果
@@ -154,7 +156,7 @@ class BaseASREngine(ABC):
 
                 logger.info(f"{task_prefix}使用说话人分离模式")
                 diarizer = SpeakerDiarizer()
-                speaker_segments = diarizer.split_audio_by_speakers(audio_path)
+                speaker_segments = diarizer.split_audio_by_speakers(audio_path, speaker_num=speaker_num)
 
                 if not speaker_segments:
                     logger.warning(f"{task_prefix}说话人分离未检测到片段，fallback 到 VAD 分割")

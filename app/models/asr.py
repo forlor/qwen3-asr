@@ -37,6 +37,11 @@ class ASRQueryParams(BaseModel):
         description="是否启用说话人分离。启用后响应会包含 speaker_id",
     )
 
+    speaker_num: Optional[int] = Field(
+        default=None,
+        description="已知说话人数量（可选，不传则自动检测。指定后可提高短语音/噪声场景下的识别准确率）",
+    )
+
     word_timestamps: Optional[bool] = Field(
         default=False,
         description="是否返回字词级时间戳（默认关闭；Qwen CUDA vLLM / CPU Rust 会在启用时自动调用 forced aligner）",

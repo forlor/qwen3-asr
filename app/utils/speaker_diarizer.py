@@ -263,12 +263,13 @@ class SpeakerDiarizer:
         self.min_segment_ms = int(min_segment_sec * 1000)
 
     def diarize(
-        self, audio_path: str
+        self, audio_path: str, speaker_num: Optional[int] = None
     ) -> List[SpeakerSegment]:
         """执行说话人分离
 
         Args:
             audio_path: 音频文件路径
+            speaker_num: 已知说话人数量（可选，不传则自动检测）
 
         Returns:
             原始分段列表（未合并）
@@ -276,9 +277,13 @@ class SpeakerDiarizer:
         try:
             pipeline = get_global_diarization_pipeline()
 
-            logger.info(f"开始说话人分离: {audio_path}")
+            pipeline_kwargs = {"merge_thr": 0.95}
+            if speaker_num is not None and speaker_num > 0:
+                pipeline_kwargs["oracle_num"] = speaker_num
+
+            logger.info(f"开始说话人分离: {audio_path}, params={pipeline_kwargs}")
             with _diarization_inference_semaphore:
-                result = pipeline(audio_path, merge_thr=0.95)
+                result = pipeline(audio_path, **pipeline_kwargs)
 
             # 解析结果: {'text': [[start, end, speaker_id], ...]}
             # pipeline 返回类型不确定，需要安全地获取 'text' 字段
@@ -592,6 +597,7 @@ class SpeakerDiarizer:
         self,
         audio_path: str,
         output_dir: Optional[str] = None,
+        speaker_num: Optional[int] = None,
     ) -> List[SpeakerSegment]:
         """完整的说话人分离流程
 
@@ -605,13 +611,14 @@ class SpeakerDiarizer:
         Args:
             audio_path: 音频文件路径
             output_dir: 输出目录
+            speaker_num: 已知说话人数量（可选，不传则自动检测）
 
         Returns:
             SpeakerSegment 列表
         """
         try:
             # 1. 执行说话人分离
-            raw_segments = self.diarize(audio_path)
+            raw_segments = self.diarize(audio_path, speaker_num=speaker_num)
 
             if not raw_segments:
                 logger.warning("说话人分离未检测到任何片段")

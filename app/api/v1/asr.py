@@ -151,6 +151,17 @@ async def get_asr_params(request: Request) -> ASRQueryParams:
                 "description": "是否启用说话人分离。启用后响应会包含 speaker_id 字段",
             },
             {
+                "name": "speaker_num",
+                "in": "query",
+                "required": False,
+                "schema": {
+                    "type": "integer",
+                    "default": None,
+                    "example": 2,
+                },
+                "description": "已知说话人数量（可选，不传则自动检测。指定后可提高短语音/噪声场景下的识别准确率）",
+            },
+            {
                 "name": "word_timestamps",
                 "in": "query",
                 "required": False,
@@ -229,7 +240,7 @@ async def asr_transcribe(
             sample_rate=target_sample_rate,
         )
 
-        logger.info(f"[{task_id}] 开始调用 transcribe_long_audio (enable_speaker_diarization={params.enable_speaker_diarization})...")
+        logger.info(f"[{task_id}] 开始调用 transcribe_long_audio (enable_speaker_diarization={params.enable_speaker_diarization}, speaker_num={params.speaker_num})...")
         asr_result = await transcription_service.transcribe(
             prepared_audio,
             OfflineTranscriptionOptions(
@@ -238,6 +249,7 @@ async def asr_transcribe(
                 enable_speaker_diarization=params.enable_speaker_diarization is not False,
                 word_timestamps=params.word_timestamps is True,
                 task_id=task_id,
+                speaker_num=params.speaker_num,
             ),
         )
 
