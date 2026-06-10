@@ -17,11 +17,11 @@ from .base import (
 # FunASR引擎
 from .funasr import FunASREngine
 
-# 全局模型管理
 from .global_models import (
     get_global_vad_model,
     get_global_punc_model,
     get_global_punc_realtime_model,
+    get_vad_inference_lock,
     get_punc_inference_lock,
     get_punc_realtime_inference_lock,
 )
@@ -41,6 +41,7 @@ __all__ = [
     "get_global_vad_model",
     "get_global_punc_model",
     "get_global_punc_realtime_model",
+    "get_vad_inference_lock",
     "get_punc_inference_lock",
     "get_punc_realtime_inference_lock",
 ]
