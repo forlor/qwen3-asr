@@ -353,8 +353,6 @@ class BaseASREngine(ABC):
             speaker_turns: 说话人片段列表（绝对时间）
             pad_offset_sec: chunk 前置静音填充的秒数，需减去以修正偏移
         """
-        import re
-
         # 1. 基础匹配：计算每个 word 的绝对时间，并匹配重叠最多的 speaker
         for word in word_tokens:
             # 减去前置静音偏移，再转为绝对时间
