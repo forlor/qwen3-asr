@@ -205,6 +205,10 @@ class BaseASREngine(ABC):
                             split_segs = self._split_by_speaker(
                                 result.word_tokens
                             )
+                            # 按用户原始参数决定是否保留 word_tokens
+                            if not word_timestamps:
+                                for seg in split_segs:
+                                    seg.word_tokens = None
                             results.extend(split_segs)
                             all_texts.extend(s.text for s in split_segs)
                         else:
@@ -362,6 +366,16 @@ class BaseASREngine(ABC):
                 if turn.start_sec <= abs_mid <= turn.end_sec:
                     word.speaker_id = turn.speaker_id  # type: ignore[attr-defined]
                     break
+            # fallback：未匹配的 word 使用时间最近的前一个 turn 的 speaker_id
+            if word.speaker_id is None and speaker_turns:
+                best_turn = speaker_turns[0]
+                best_dist = abs(abs_mid - (best_turn.start_sec + best_turn.end_sec) / 2.0)
+                for turn in speaker_turns[1:]:
+                    dist = abs(abs_mid - (turn.start_sec + turn.end_sec) / 2.0)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_turn = turn
+                word.speaker_id = best_turn.speaker_id  # type: ignore[attr-defined]
             # 恢复为绝对时间（后续 timestamp_scale 会统一缩放）
             word.start_time = abs_start
             word.end_time = abs_end

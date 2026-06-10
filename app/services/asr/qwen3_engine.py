@@ -44,8 +44,8 @@ def calculate_gpu_memory_utilization(model_path: str) -> float:
             logger.warning(f"Invalid QWEN_GPU_MEMORY_UTILIZATION={env_override}, not a float")
 
     model_memory_profiles = {
-        "0.6B": 8,
-        "1.7B": 12.0,
+        "0.6B": 5,
+        "1.7B": 10.0,
     }
 
     if "0.6B" in model_path:

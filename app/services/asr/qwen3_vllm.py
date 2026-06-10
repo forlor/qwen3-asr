@@ -119,6 +119,7 @@ def _resolve_forced_aligner_gpu_memory_utilization(primary_utilization: float) -
         try:
             value = float(override)
             if 0.0 < value <= 1.0:
+                logger.info("Using env override for forced aligner gpu_memory_utilization=%s", value)
                 return value
         except ValueError:
             logger.warning(
@@ -126,6 +127,19 @@ def _resolve_forced_aligner_gpu_memory_utilization(primary_utilization: float) -
                 override,
             )
 
+    budget_gb = 3.0
+    try:
+        import torch
+        if torch.cuda.is_available():
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            computed = budget_gb / total_vram_gb
+            logger.info(
+                "Forced aligner memory: budget=%.1fGB, total_vram=%.1fGB, utilization=%.2f",
+                budget_gb, total_vram_gb, computed,
+            )
+            return round(min(computed, 0.95), 2)
+    except Exception:
+        pass
     return primary_utilization
 
 

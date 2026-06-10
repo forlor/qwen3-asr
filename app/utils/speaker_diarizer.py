@@ -795,7 +795,7 @@ class SpeakerDiarizer:
         output_dir = settings.TEMP_DIR
         os.makedirs(output_dir, exist_ok=True)
 
-        # 5. 为每个 chunk 提取音频、保存临时文件
+        # 7. 为每个 chunk 提取音频、保存临时文件
         chunks: List[AsrChunk] = []
         for group_idx, group in enumerate(chunk_groups):
             chunk_start_ms = group[0].start_ms
@@ -804,6 +804,18 @@ class SpeakerDiarizer:
             end_sample = int(chunk_end_ms / 1000 * sample_rate)
 
             chunk_audio = audio_data[start_sample:end_sample]
+
+            # 短 chunk 静音填充：不足 MIN_OUTPUT_SEC 则前后补静音
+            min_samples = int(self.MIN_OUTPUT_SEC * sample_rate)
+            if len(chunk_audio) < min_samples:
+                shortfall = min_samples - len(chunk_audio)
+                pad_before = shortfall // 2
+                pad_after = shortfall - pad_before
+                chunk_audio = np.concatenate([
+                    np.zeros(pad_before, dtype=np.float32),
+                    chunk_audio,
+                    np.zeros(pad_after, dtype=np.float32),
+                ])
 
             temp_file = tempfile.NamedTemporaryFile(
                 delete=False,
