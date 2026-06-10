@@ -388,45 +388,65 @@ class BaseASREngine(ABC):
             word.start_time = abs_start
             word.end_time = abs_end
 
-        # 2. 上下文平滑 (Phrase-level Smoothing)
-        # 防止单字或短词因为处于时间边界而被错误划分到另一个说话人，导致一句话被切碎。
-        # 策略：按标点或明显停顿切分短语，短语内的词统一归属为该短语内占比最大的说话人。
-        phrases = []
-        current_phrase = []
-        for i, word in enumerate(word_tokens):
-            current_phrase.append(word)
+        # 2. 边界纠错：基于停顿的边界对齐 (Pause-based Boundary Alignment)
+        # VAD 边界往往因为音量悬殊而不准，导致一句话结尾或开头的几个连续字被分错。
+        # 核心逻辑：真正的对话切换通常伴随明显的停顿。如果重叠算法得出的切换点发生在连续语流中（无停顿），
+        # 说明声纹边界切碎了连贯的一句话。我们就在附近寻找真正的停顿点，并将边界整体移动过去。
+        
+        SEARCH_WINDOW = 4 
+        PAUSE_THRESHOLD = 0.3  # 认定为对话切换的最小停顿（秒）
 
-            # 判断是否为短语结束点：
-            # a. 包含句末/句中停顿标点
-            has_punc = bool(re.search(r'[，。！？、；,.\?!;]', word.text))
-            # b. 与下一个词之间有明显的停顿 (> 0.4s)
-            has_pause = False
-            if i < len(word_tokens) - 1:
-                if word_tokens[i+1].start_time - word.end_time > 0.4:
-                    has_pause = True
+        # 找出所有发生说话人切换的索引 (i 表示 word[i] 和 word[i+1] 说话人不同)
+        switch_points = []
+        for i in range(len(word_tokens) - 1):
+            if word_tokens[i].speaker_id != word_tokens[i+1].speaker_id:
+                switch_points.append(i)
 
-            if has_punc or has_pause or i == len(word_tokens) - 1:
-                phrases.append(current_phrase)
-                current_phrase = []
-
-        # 对每个短语，进行投票决定最终 speaker
-        for phrase in phrases:
-            if not phrase:
+        for i in switch_points:
+            # 这里的 i 可能是因为之前的平滑被修改过，所以要重新验证一下是否还是切换点
+            if word_tokens[i].speaker_id == word_tokens[i+1].speaker_id:
                 continue
 
-            # 统计每个 speaker 在该短语中的总时长
-            spk_durations = {}
-            for w in phrase:
-                spk = w.speaker_id
-                dur = max(0.0, w.end_time - w.start_time)
-                spk_durations[spk] = spk_durations.get(spk, 0.0) + dur
+            current_gap = word_tokens[i+1].start_time - word_tokens[i].end_time
+            
+            # 如果当前切换点已经是一个比较明显的停顿，那我们就信任这个边界
+            if current_gap >= PAUSE_THRESHOLD:
+                continue
+                
+            # 如果没有停顿（语流连续），说明 VAD 边界大概率切偏了
+            # 在附近前后寻找最大的停顿点
+            best_gap_idx = i
+            max_gap = current_gap
+            
+            start_idx = max(0, i - SEARCH_WINDOW)
+            end_idx = min(len(word_tokens) - 2, i + SEARCH_WINDOW)
+            
+            for j in range(start_idx, end_idx + 1):
+                gap = word_tokens[j+1].start_time - word_tokens[j].end_time
+                if gap > max_gap:
+                    max_gap = gap
+                    best_gap_idx = j
+            
+            # 如果附近找到了真正的停顿，就把发生切换的边界移过去
+            if max_gap >= PAUSE_THRESHOLD and best_gap_idx != i:
+                if best_gap_idx > i:
+                    # 真正的停顿在右边，说明中间这几个字其实属于左边的说话人（前一个人尾音被切）
+                    for k in range(i + 1, best_gap_idx + 1):
+                        word_tokens[k].speaker_id = word_tokens[i].speaker_id
+                else:
+                    # 真正的停顿在左边，说明中间这几个字其实属于右边的说话人（后一个人开头被抢）
+                    for k in range(best_gap_idx + 1, i + 1):
+                        word_tokens[k].speaker_id = word_tokens[i+1].speaker_id
 
-            if spk_durations:
-                # 选出该短语的主要说话人
-                dominant_spk = max(spk_durations, key=spk_durations.get)
-                # 统一修正该短语下所有词的 speaker_id
-                for w in phrase:
-                    w.speaker_id = dominant_spk
+        # 3. 极短杂音滤除 (Micro-segment filtering)
+        # 如果经过边界调整后，某个说话人仅仅“插嘴”了 1 个字，且持续时间极短，通常是杂音误判
+        if len(word_tokens) >= 3:
+            for i in range(1, len(word_tokens) - 1):
+                if word_tokens[i-1].speaker_id == word_tokens[i+1].speaker_id:
+                    if word_tokens[i].speaker_id != word_tokens[i-1].speaker_id:
+                        # 孤立的单字
+                        if word_tokens[i].end_time - word_tokens[i].start_time < 0.3:
+                            word_tokens[i].speaker_id = word_tokens[i-1].speaker_id
 
     @staticmethod
     def _split_by_speaker(
