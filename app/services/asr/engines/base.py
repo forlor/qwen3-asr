@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 ASR引擎基础模块
 包含抽象基类和数据类定义
@@ -386,65 +386,46 @@ class BaseASREngine(ABC):
             word.start_time = abs_start
             word.end_time = abs_end
 
-        # 2. 边界纠错：基于停顿的边界对齐 (Pause-based Boundary Alignment)
-        # VAD 边界往往因为音量悬殊而不准，导致一句话结尾或开头的几个连续字被分错。
-        # 核心逻辑：真正的对话切换通常伴随明显的停顿。如果重叠算法得出的切换点发生在连续语流中（无停顿），
-        # 说明声纹边界切碎了连贯的一句话。我们就在附近寻找真正的停顿点，并将边界整体移动过去。
-        
-        SEARCH_WINDOW = 4 
-        PAUSE_THRESHOLD = 0.3  # 认定为对话切换的最小停顿（秒）
+        # 2. 保守的孤岛消除 (Conservative Island Removal)
+        # 如果某个说话人只"插嘴"了极短的 1~3 个字，且前后都是同一个说话人，
+        # 这几乎肯定是声纹边界抖动造成的误判，将其合并回周围的说话人。
+        MAX_ISLAND_WORDS = 3
+        MAX_ISLAND_DURATION_SEC = 0.8
 
-        # 找出所有发生说话人切换的索引 (i 表示 word[i] 和 word[i+1] 说话人不同)
-        switch_points = []
-        for i in range(len(word_tokens) - 1):
-            if word_tokens[i].speaker_id != word_tokens[i+1].speaker_id:
-                switch_points.append(i)
+        runs: list[tuple[int, int, str]] = []
+        if word_tokens:
+            run_start = 0
+            for i in range(1, len(word_tokens)):
+                if word_tokens[i].speaker_id != word_tokens[run_start].speaker_id:
+                    runs.append((run_start, i - 1, word_tokens[run_start].speaker_id))
+                    run_start = i
+            runs.append((run_start, len(word_tokens) - 1, word_tokens[run_start].speaker_id))
 
-        for i in switch_points:
-            # 这里的 i 可能是因为之前的平滑被修改过，所以要重新验证一下是否还是切换点
-            if word_tokens[i].speaker_id == word_tokens[i+1].speaker_id:
+        for run_idx in range(1, len(runs) - 1):
+            start, end, spk = runs[run_idx]
+            prev_spk = runs[run_idx - 1][2]
+            next_spk = runs[run_idx + 1][2]
+
+            if prev_spk != next_spk:
                 continue
 
-            current_gap = word_tokens[i+1].start_time - word_tokens[i].end_time
-            
-            # 如果当前切换点已经是一个比较明显的停顿，那我们就信任这个边界
-            if current_gap >= PAUSE_THRESHOLD:
+            num_words = end - start + 1
+            if num_words > MAX_ISLAND_WORDS:
                 continue
-                
-            # 如果没有停顿（语流连续），说明 VAD 边界大概率切偏了
-            # 在附近前后寻找最大的停顿点
-            best_gap_idx = i
-            max_gap = current_gap
-            
-            start_idx = max(0, i - SEARCH_WINDOW)
-            end_idx = min(len(word_tokens) - 2, i + SEARCH_WINDOW)
-            
-            for j in range(start_idx, end_idx + 1):
-                gap = word_tokens[j+1].start_time - word_tokens[j].end_time
-                if gap > max_gap:
-                    max_gap = gap
-                    best_gap_idx = j
-            
-            # 如果附近找到了真正的停顿，就把发生切换的边界移过去
-            if max_gap >= PAUSE_THRESHOLD and best_gap_idx != i:
-                if best_gap_idx > i:
-                    # 真正的停顿在右边，说明中间这几个字其实属于左边的说话人（前一个人尾音被切）
-                    for k in range(i + 1, best_gap_idx + 1):
-                        word_tokens[k].speaker_id = word_tokens[i].speaker_id
-                else:
-                    # 真正的停顿在左边，说明中间这几个字其实属于右边的说话人（后一个人开头被抢）
-                    for k in range(best_gap_idx + 1, i + 1):
-                        word_tokens[k].speaker_id = word_tokens[i+1].speaker_id
 
-        # 3. 极短杂音滤除 (Micro-segment filtering)
-        # 如果经过边界调整后，某个说话人仅仅“插嘴”了 1 个字，且持续时间极短，通常是杂音误判
-        if len(word_tokens) >= 3:
-            for i in range(1, len(word_tokens) - 1):
-                if word_tokens[i-1].speaker_id == word_tokens[i+1].speaker_id:
-                    if word_tokens[i].speaker_id != word_tokens[i-1].speaker_id:
-                        # 孤立的单字
-                        if word_tokens[i].end_time - word_tokens[i].start_time < 0.3:
-                            word_tokens[i].speaker_id = word_tokens[i-1].speaker_id
+            duration = max(0.0, word_tokens[end].end_time - word_tokens[start].start_time)
+            if duration > MAX_ISLAND_DURATION_SEC:
+                continue
+
+            for i in range(start, end + 1):
+                word_tokens[i].speaker_id = prev_spk
+
+        # 3. 孤立标点归属修正
+        for i, word in enumerate(word_tokens):
+            text = word.text.strip()
+            if text and all(c in '\uff0c\u3002\uff01\uff1f\u3001\uff1b,.?!;\uff1a:' for c in text):
+                if i > 0:
+                    word.speaker_id = word_tokens[i - 1].speaker_id
 
     @staticmethod
     def _split_by_speaker(

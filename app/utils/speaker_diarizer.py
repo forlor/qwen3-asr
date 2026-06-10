@@ -638,19 +638,8 @@ class SpeakerDiarizer:
             SpeakerSegment 列表
         """
         try:
-            # 1. 加载音频并做 Peak 增益归一化（缓解音量悬殊导致 VAD 边界偏移）
-            logger.info("加载音频并进行增益归一化...")
-            audio_data, sample_rate, diarize_path, _norm_tmp = (
-                self._load_and_normalize_for_diarization(audio_path)
-            )
-            try:
-                raw_segments = self.diarize(diarize_path, speaker_num=speaker_num)
-            finally:
-                if _norm_tmp:
-                    try:
-                        os.remove(_norm_tmp)
-                    except Exception:
-                        pass
+            # 1. 执行说话人分离
+            raw_segments = self.diarize(audio_path, speaker_num=speaker_num)
 
             if not raw_segments:
                 logger.warning("说话人分离未检测到任何片段")
@@ -658,6 +647,11 @@ class SpeakerDiarizer:
 
             # 2. 智能合并短片段（第一个<10s的同说话人片段向后合并）
             final_segments = self.merge_short_segments(raw_segments)
+
+            # 3. Load audio before low-energy splitting and segment extraction.
+            logger.info("加载音频并提取片段...")
+            audio_data, sr = librosa.load(audio_path, sr=self.DEFAULT_SAMPLE_RATE)
+            sample_rate = int(sr)
 
             final_segments = self.split_long_segments(
                 final_segments,
@@ -744,45 +738,6 @@ class SpeakerDiarizer:
                 except Exception as e:
                     logger.warning(f"清理临时文件失败: {chunk.temp_file}, {e}")
 
-    def _load_and_normalize_for_diarization(
-        self,
-        audio_path: str,
-    ) -> tuple[np.ndarray, int, str, Optional[str]]:
-        """加载音频并做 Peak 增益归一化，返回适合声纹分离的音频。
-
-        Peak 归一化将最大振幅拉到 1.0，缓解录音中说话人音量悬殊
-        导致 VAD 边界严重偏移的问题。
-
-        Returns:
-            (audio_data, sample_rate, diarize_path, norm_temp_path)
-            - audio_data: 归一化后的音频数组
-            - sample_rate: 采样率
-            - diarize_path: 供 CAM++ 使用的音频路径（可能是临时文件）
-            - norm_temp_path: 临时文件路径，调用者需清理；若未创建则为 None
-        """
-        audio_data, sr = librosa.load(audio_path, sr=self.DEFAULT_SAMPLE_RATE)
-        sample_rate = int(sr)
-
-        peak = float(np.max(np.abs(audio_data)))
-        norm_temp_path: Optional[str] = None
-
-        if peak > 1e-6 and peak < 0.99:
-            audio_data = (audio_data / peak).astype(np.float32)
-            gain_db = 20 * np.log10(1.0 / peak)
-            logger.info(
-                f"音频增益归一化: peak={peak:.4f} → 1.0 (增益 +{gain_db:.1f}dB)"
-            )
-            _f = tempfile.NamedTemporaryFile(
-                delete=False, suffix=".wav", dir=settings.TEMP_DIR,
-                prefix="norm_diar_",
-            )
-            norm_temp_path = _f.name
-            _f.close()
-            sf.write(norm_temp_path, audio_data, sample_rate)
-
-        diarize_path = norm_temp_path or audio_path
-        return audio_data, sample_rate, diarize_path, norm_temp_path
-
     def build_asr_chunks(
         self,
         audio_path: str,
@@ -801,23 +756,16 @@ class SpeakerDiarizer:
         Returns:
             (chunks, speaker_turns): ASR 分块列表和原始说话人片段列表
         """
-        # 1. 加载音频并做 Peak 增益归一化（缓解音量悬殊导致 VAD 边界偏移）
-        logger.info("加载音频并进行增益归一化...")
-        audio_data, sample_rate, diarize_path, _norm_tmp = (
-            self._load_and_normalize_for_diarization(audio_path)
-        )
-        try:
-            raw_segments = self.diarize(diarize_path, speaker_num=speaker_num)
-        finally:
-            if _norm_tmp:
-                try:
-                    os.remove(_norm_tmp)
-                except Exception:
-                    pass
-
+        # 1. 执行说话人分离
+        raw_segments = self.diarize(audio_path, speaker_num=speaker_num)
         if not raw_segments:
             logger.warning("说话人分离未检测到任何片段")
             return [], []
+
+        # 2. 加载音频（提前加载，后续 diarize/merge/split 复用）
+        logger.info("加载音频并构建 ASR 分块...")
+        audio_data, sr = librosa.load(audio_path, sr=self.DEFAULT_SAMPLE_RATE)
+        sample_rate = int(sr)
 
         # 3. 合并同一说话人连续片段（避免在说话人内部有微小间隙导致分段过碎）
         merged = self.merge_consecutive_segments(raw_segments)
