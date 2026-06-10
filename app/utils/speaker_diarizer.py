@@ -62,6 +62,7 @@ class AsrChunk:
     end_ms: int
     temp_file: str
     speaker_turns: List[SpeakerSegment]  # 该时间段内的说话人片段
+    pad_offset_sec: float = 0.0  # 前置静音填充时长（秒），用于修正时间戳偏移
 
     @property
     def start_sec(self) -> float:
@@ -802,6 +803,7 @@ class SpeakerDiarizer:
                 chunk_audio = audio_data[start_sample:end_sample]
 
                 # 短 chunk 静音填充：不足 MIN_OUTPUT_SEC 则前后补静音
+                pad_offset_sec = 0.0
                 min_samples = int(self.MIN_OUTPUT_SEC * sample_rate)
                 if len(chunk_audio) < min_samples:
                     shortfall = min_samples - len(chunk_audio)
@@ -812,6 +814,7 @@ class SpeakerDiarizer:
                         chunk_audio,
                         np.zeros(pad_after, dtype=np.float32),
                     ])
+                    pad_offset_sec = pad_before / sample_rate
 
                 temp_file = tempfile.NamedTemporaryFile(
                     delete=False,
@@ -828,6 +831,7 @@ class SpeakerDiarizer:
                     end_ms=chunk_end_ms,
                     temp_file=temp_path,
                     speaker_turns=group,
+                    pad_offset_sec=pad_offset_sec,
                 ))
         except Exception:
             # 清理已创建的临时文件，避免泄漏

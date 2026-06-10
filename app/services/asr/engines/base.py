@@ -219,7 +219,8 @@ class BaseASREngine(ABC):
 
                     if speaker_mode and result.word_tokens:
                         self._assign_speakers_to_words(
-                            result.word_tokens, seg.start_sec, seg.speaker_turns
+                            result.word_tokens, seg.start_sec, seg.speaker_turns,
+                            getattr(seg, 'pad_offset_sec', 0.0),
                         )
                         split_segs = self._split_by_speaker(result.word_tokens)
                         if not word_timestamps:
@@ -342,18 +343,35 @@ class BaseASREngine(ABC):
         word_tokens: List["WordToken"],
         chunk_start_sec: float,
         speaker_turns: list,
+        pad_offset_sec: float = 0.0,
     ) -> None:
-        """将 word 时间戳（相对 chunk）转为绝对时间并匹配说话人"""
+        """将 word 时间戳（相对 chunk）转为绝对时间并匹配说话人
+
+        Args:
+            word_tokens: 词级时间戳列表（时间相对于 chunk 音频起始）
+            chunk_start_sec: chunk 在原始音频中的起始秒数
+            speaker_turns: 说话人片段列表（绝对时间）
+            pad_offset_sec: chunk 前置静音填充的秒数，需减去以修正偏移
+        """
         for word in word_tokens:
-            abs_start = word.start_time + chunk_start_sec
-            abs_end = word.end_time + chunk_start_sec
-            abs_mid = (abs_start + abs_end) / 2.0
+            # 减去前置静音偏移，再转为绝对时间
+            abs_start = word.start_time - pad_offset_sec + chunk_start_sec
+            abs_end = word.end_time - pad_offset_sec + chunk_start_sec
+
+            # 用重叠量匹配说话人：计算 word 与每个 turn 的重叠时长
+            best_speaker = None
+            best_overlap = 0.0
             for turn in speaker_turns:
-                if turn.start_sec <= abs_mid <= turn.end_sec:
-                    word.speaker_id = turn.speaker_id  # type: ignore[attr-defined]
-                    break
-            # fallback：未匹配的 word 使用时间最近的前一个 turn 的 speaker_id
-            if word.speaker_id is None and speaker_turns:
+                overlap_start = max(abs_start, turn.start_sec)
+                overlap_end = min(abs_end, turn.end_sec)
+                overlap = overlap_end - overlap_start
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_speaker = turn.speaker_id
+
+            # fallback：无重叠时使用时间最近的 turn
+            if best_speaker is None and speaker_turns:
+                abs_mid = (abs_start + abs_end) / 2.0
                 best_turn = speaker_turns[0]
                 best_dist = abs(abs_mid - (best_turn.start_sec + best_turn.end_sec) / 2.0)
                 for turn in speaker_turns[1:]:
@@ -361,8 +379,9 @@ class BaseASREngine(ABC):
                     if dist < best_dist:
                         best_dist = dist
                         best_turn = turn
-                word.speaker_id = best_turn.speaker_id  # type: ignore[attr-defined]
-            # 恢复为绝对时间（后续 timestamp_scale 会统一缩放）
+                best_speaker = best_turn.speaker_id
+
+            word.speaker_id = best_speaker
             word.start_time = abs_start
             word.end_time = abs_end
 
