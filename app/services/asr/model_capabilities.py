@@ -38,32 +38,33 @@ _VAD_ASSETS = (
 
 _DIARIZATION_ASSETS = (
     ModelAsset(
-        source="modelscope",
-        model_id="iic/speech_campplus_speaker-diarization_common",
-        description="CAM++ Diarization",
-        required_patterns=(
-            "configuration.json",
-            "config.yaml",
-            "onnx/asd.onnx",
-            "onnx/face_recog_ir101.onnx",
-            "onnx/fqa.onnx",
-            "onnx/version-RFB-320.onnx",
+        source="huggingface",
+        model_id="pyannote/speaker-diarization-3.1",
+        description="Pyannote Diarization Pipeline",
+        required_patterns=("snapshots/*/config.yaml",),
+        min_total_size_bytes=1_000,
+    ),
+    ModelAsset(
+        source="huggingface",
+        model_id="pyannote/segmentation-3.0",
+        description="Pyannote Segmentation",
+        required_patterns=(),
+        alternative_required_patterns=(
+            ("snapshots/*/pytorch_model.bin",),
+            ("snapshots/*/model.safetensors",),
+        ),
+        min_total_size_bytes=10_000_000,
+    ),
+    ModelAsset(
+        source="huggingface",
+        model_id="pyannote/wespeaker-voxceleb-resnet34-LM",
+        description="Pyannote Speaker Embedding",
+        required_patterns=(),
+        alternative_required_patterns=(
+            ("snapshots/*/pytorch_model.bin",),
+            ("snapshots/*/model.safetensors",),
         ),
         min_total_size_bytes=50_000_000,
-    ),
-    ModelAsset(
-        source="modelscope",
-        model_id="damo/speech_campplus_sv_zh-cn_16k-common",
-        description="CAM++ Speaker Verification",
-        required_patterns=("configuration.json", "config.yaml", "campplus_cn_common.bin"),
-        min_total_size_bytes=10_000_000,
-    ),
-    ModelAsset(
-        source="modelscope",
-        model_id="damo/speech_campplus-transformer_scl_zh-cn_16k-common",
-        description="CAM++ Transformer",
-        required_patterns=("configuration.json", "campplus_cn_encoder.pt", "transformer_backend.pt"),
-        min_total_size_bytes=10_000_000,
     ),
 )
 
@@ -103,7 +104,6 @@ def get_download_modelscope_assets() -> list[ModelAsset]:
     """Return the full static ModelScope export set used by predownload/export."""
     return [
         *_VAD_ASSETS,
-        *_DIARIZATION_ASSETS,
         *_REALTIME_PARAFORMER_ASSETS,
         _REALTIME_PUNC_ASSET,
     ]
@@ -114,7 +114,7 @@ def get_runtime_required_modelscope_assets(
     include_realtime_punc: bool,
 ) -> list[ModelAsset]:
     """Return ModelScope assets required by the current runtime plan."""
-    assets = [*_VAD_ASSETS, *_DIARIZATION_ASSETS]
+    assets = [*_VAD_ASSETS]
     runtime_models = get_runtime_model_ids()
     if "paraformer-large" in runtime_models:
         assets.extend(_REALTIME_PARAFORMER_ASSETS)
@@ -164,10 +164,6 @@ def get_enabled_qwen_huggingface_assets(
     return assets
 
 
-def get_camplusplus_replacement_paths(cache_dir: str) -> dict[str, str]:
-    """Return the CAM++ offline replacement map for local cache paths."""
-    return {
-        "damo/speech_campplus_sv_zh-cn_16k-common": f"{cache_dir}/damo/speech_campplus_sv_zh-cn_16k-common",
-        "damo/speech_campplus-transformer_scl_zh-cn_16k-common": f"{cache_dir}/damo/speech_campplus-transformer_scl_zh-cn_16k-common",
-        "damo/speech_fsmn_vad_zh-cn-16k-common-pytorch": f"{cache_dir}/damo/speech_fsmn_vad_zh-cn-16k-common-pytorch",
-    }
+def get_diarization_huggingface_assets() -> list[ModelAsset]:
+    """Return HuggingFace assets for pyannote speaker diarization."""
+    return list(_DIARIZATION_ASSETS)

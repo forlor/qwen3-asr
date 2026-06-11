@@ -23,7 +23,8 @@ class Settings:
     DEBUG: bool = False
 
     # 鉴权配置
-    API_KEY: Optional[str] = None  # 从环境变量API_KEY读取，如果为None则鉴权可选
+    API_KEY: Optional[str] = None
+    HF_TOKEN: Optional[str] = None  # HuggingFace token，用于下载 pyannote 等 gated 模型  # 从环境变量API_KEY读取，如果为None则鉴权可选
 
     # 设备配置
     DEVICE: str = "auto"  # auto, cpu, cuda:0, npu:0
@@ -75,9 +76,8 @@ class Settings:
     # 音频分段配置
     MAX_SEGMENT_SEC: float = 60.0  # Max offline ASR segment duration in seconds.
 
-    # 说话人分离调参
-    DIARIZATION_MERGE_THR: float = 0.75  # 未指定说话人数时的合并阈值（默认0.75）
-    DIARIZATION_ORACLE_MERGE_THR: float = 0.50  # 已指定说话人数时的合并阈值，调低以防强制归类时过度合并（默认0.50）
+    # 说话人分离调参 (pyannote)
+    DIARIZATION_CLUSTERING_THRESHOLD: float = 0.70  # pyannote 聚类阈值，越高越不容易分出新说话人（默认0.70）
     DIARIZATION_MIN_OUTPUT_SEC: float = 5.0  # 短片段最小输出时长（秒），不足则补静音，提升 embedding 质量
 
     # Runtime 并发配置（按 backend 独立控制）
@@ -108,6 +108,7 @@ class Settings:
 
         # 鉴权配置：空值/空白统一视为未配置
         self.API_KEY = (os.getenv("API_KEY") or "").strip() or None
+        self.HF_TOKEN = (os.getenv("HF_TOKEN") or "").strip() or None
 
         # 设备配置
         self.DEVICE = os.getenv("DEVICE", self.DEVICE)
@@ -157,11 +158,8 @@ class Settings:
         self.MAX_SEGMENT_SEC = float(
             os.getenv("MAX_SEGMENT_SEC", str(self.MAX_SEGMENT_SEC))
         )
-        self.DIARIZATION_MERGE_THR = float(
-            os.getenv("DIARIZATION_MERGE_THR", str(self.DIARIZATION_MERGE_THR))
-        )
-        self.DIARIZATION_ORACLE_MERGE_THR = float(
-            os.getenv("DIARIZATION_ORACLE_MERGE_THR", str(self.DIARIZATION_ORACLE_MERGE_THR))
+        self.DIARIZATION_CLUSTERING_THRESHOLD = float(
+            os.getenv("DIARIZATION_CLUSTERING_THRESHOLD", str(self.DIARIZATION_CLUSTERING_THRESHOLD))
         )
         self.DIARIZATION_MIN_OUTPUT_SEC = float(
             os.getenv("DIARIZATION_MIN_OUTPUT_SEC", str(self.DIARIZATION_MIN_OUTPUT_SEC))

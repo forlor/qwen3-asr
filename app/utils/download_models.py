@@ -16,7 +16,7 @@ from typing import Optional
 from huggingface_hub import snapshot_download as hf_snapshot_download
 from modelscope.hub.snapshot_download import snapshot_download as ms_snapshot_download
 from app.services.asr.model_capabilities import (
-    get_camplusplus_replacement_paths,
+    get_diarization_huggingface_assets,
     get_download_modelscope_assets,
     get_enabled_qwen_huggingface_assets,
 )
@@ -86,55 +86,17 @@ def check_all_models() -> list[tuple[str, str, str, Optional[str]]]:
         if not exists:
             missing.append((asset.model_id, asset.description, "huggingface", None))
 
+    # 检查 pyannote 说话人分离模型 (HuggingFace gated models)
+    diarization_assets = get_diarization_huggingface_assets()
+    for asset in diarization_assets:
+        exists, _ = check_model_exists(asset.model_id, source="huggingface")
+        if not exists:
+            missing.append((asset.model_id, asset.description, "huggingface", None))
+
     return missing
 
 
-def fix_camplusplus_config() -> bool:
-    """修复 CAM++ 配置文件，将模型ID替换为本地路径（用于离线环境）
 
-    修复 issue #15: 离线环境下 CAM++ 模型会尝试从 modelscope.cn 获取依赖模型配置
-
-    Returns:
-        是否修复成功
-    """
-    try:
-        cache_dir = Path.home() / ".cache" / "modelscope" / "hub" / "models"
-        config_file = cache_dir / "iic/speech_campplus_speaker-diarization_common/configuration.json"
-
-        if not config_file.exists():
-            return False
-
-        # 读取配置文件
-        with open(config_file, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-
-        # 需要替换的模型ID -> 本地路径映射
-        replacements = get_camplusplus_replacement_paths(str(cache_dir))
-
-        # 检查是否需要修改
-        modified = False
-        if "model" in config:
-            for key in ["speaker_model", "change_locator", "vad_model"]:
-                if key in config["model"]:
-                    old_value = config["model"][key]
-                    if old_value in replacements:
-                        new_value = replacements[old_value]
-                        # 检查本地路径是否存在
-                        if Path(new_value).exists():
-                            config["model"][key] = new_value
-                            modified = True
-
-        # 写回配置文件
-        if modified:
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=4, ensure_ascii=False)
-            return True
-
-        return False
-
-    except Exception as e:
-        print(f"⚠️  修复 CAM++ 配置文件失败: {e}")
-        return False
 
 
 def download_models(
@@ -156,6 +118,7 @@ def download_models(
     missing = check_all_models()
     ms_assets = get_download_modelscope_assets()
     hf_assets = _get_huggingface_assets()
+    diarization_hf_assets = get_diarization_huggingface_assets()
 
     export_path = Path(export_dir) if export_dir else None
 
@@ -234,15 +197,35 @@ def download_models(
                     print(f" ❌ 失败: {e}")
                 failed.append((model_id, str(e)))
 
-    # 修复 CAM++ 配置文件（用于离线环境）
-    if not auto_mode:
-        print("\n🔧 修复 CAM++ 配置文件...")
-    if fix_camplusplus_config():
+    # 下载 pyannote 说话人分离模型 (HuggingFace gated models)
+    diarization_assets = get_diarization_huggingface_assets()
+    diarization_missing = [
+        (asset.model_id, asset.description)
+        for asset in diarization_assets
+        if not check_model_exists(asset.model_id, source="huggingface")[0]
+    ]
+    if diarization_missing:
         if not auto_mode:
-            print("  ✅ CAM++ 配置已修复（离线环境可用）")
-    else:
-        if not auto_mode:
-            print("  ℹ️  无需修复或配置文件不存在")
+            print("\n📦 开始下载 pyannote 说话人分离模型 (HuggingFace gated)...")
+            print("-" * 60)
+
+        import os
+        hf_token = os.getenv("HF_TOKEN")
+        for i, (model_id, desc) in enumerate(diarization_missing, 1):
+            if not auto_mode:
+                print(f"\n[{i}/{len(diarization_missing)}] {desc}")
+                print(f"    模型ID: {model_id}")
+                print(f"    📥 开始下载...", end="")
+
+            try:
+                path = hf_snapshot_download(model_id, token=hf_token)
+                if not auto_mode:
+                    print(f" ✅ 完成: {path}")
+                downloaded.append((model_id, "huggingface", path))
+            except Exception as e:
+                if not auto_mode:
+                    print(f" ❌ 失败: {e}")
+                failed.append((model_id, str(e)))
 
     # 导出模式：复制模型到项目 models/ 目录（与 docker-compose 挂载路径一致）
     if export_path and not failed:
@@ -258,6 +241,8 @@ def download_models(
         for asset in ms_assets:
             all_models.append((asset.model_id, "modelscope"))
         for asset in hf_assets:
+            all_models.append((asset.model_id, "huggingface"))
+        for asset in diarization_hf_assets:
             all_models.append((asset.model_id, "huggingface"))
 
         exported = 0

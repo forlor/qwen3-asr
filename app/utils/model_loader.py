@@ -390,12 +390,7 @@ def preload_models() -> dict[str, Any]:
     Returns:
         dict: 包含加载状态的字典
     """
-    # 修复 CAM++ 配置文件（用于离线环境）
-    try:
-        from .download_models import fix_camplusplus_config
-        fix_camplusplus_config()
-    except Exception:
-        pass  # 修复失败不影响启动
+    # 预加载所有需要的模型
 
     result: dict[str, Any] = {
         "asr_models": {},  # 所有ASR模型加载状态
@@ -515,8 +510,8 @@ def preload_models() -> dict[str, Any]:
                 logger.error("实时标点符号模型加载失败: %s", e)
             progress.advance("已完成标点符号模型(实时)")
 
-        # 5. 预加载说话人分离模型 (CAM++) - 必需模型，始终加载
-        progress.update("加载说话人分离模型(CAM++)")
+        # 5. 预加载说话人分离模型 (pyannote) - 必需模型，始终加载
+        progress.update("加载说话人分离模型(pyannote)")
         try:
             from ..utils.speaker_diarizer import get_global_diarization_pipeline
 
@@ -527,8 +522,8 @@ def preload_models() -> dict[str, Any]:
                 result["speaker_diarization_model"]["error"] = "说话人分离模型加载后返回None"
         except Exception as e:
             result["speaker_diarization_model"]["error"] = str(e)
-            logger.error("说话人分离模型(CAM++)加载失败: %s", e)
-        progress.advance("已完成说话人分离模型(CAM++)")
+            logger.error("说话人分离模型(pyannote)加载失败: %s", e)
+        progress.advance("已完成说话人分离模型(pyannote)")
 
     loaded_asr_count = sum(1 for status in result["asr_models"].values() if status["loaded"])
     total_asr_count = len(result["asr_models"])
