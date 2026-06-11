@@ -273,8 +273,8 @@ class SpeakerDiarizer:
 
     DEFAULT_MIN_SEGMENT_SEC = 1.0
     DEFAULT_SAMPLE_RATE = 16000
-    # 短片段最小输出时长（秒），不足则用静音填充
-    MIN_OUTPUT_SEC = 3.0
+    # 短片段最小输出时长（秒），不足则用静音填充，从 settings 读取
+    MIN_OUTPUT_SEC = settings.DIARIZATION_MIN_OUTPUT_SEC
     LOW_ENERGY_SEARCH_WINDOW_MS = 10000
     LOW_ENERGY_CONTEXT_MS = 160
     LOW_ENERGY_STEP_MS = 20
@@ -285,6 +285,41 @@ class SpeakerDiarizer:
     ):
         self.min_segment_sec = min_segment_sec
         self.min_segment_ms = int(min_segment_sec * 1000)
+
+    @staticmethod
+    def _peak_normalize_audio(audio_path: str) -> Optional[str]:
+        """对音频做 Peak 增益归一化，返回归一化后的临时文件路径。
+
+        将音频的最大绝对振幅缩放到0.95（留少量headroom避免削波），
+        让声音小的说话人的信号被充分放大，提升 embedding 提取质量。
+
+        Returns:
+            归一化后的临时文件路径，调用方负责清理；若音频已是静音则返回 None
+        """
+        try:
+            audio_data, sr = librosa.load(audio_path, sr=16000)
+            peak = np.max(np.abs(audio_data))
+            if peak < 1e-6:
+                logger.warning("音频信号过弱（接近静音），跳过 Peak 归一化")
+                return None
+            target_peak = 0.95
+            gain = target_peak / peak
+            normalized = audio_data * gain
+            logger.info(
+                f"Peak 归一化: peak={peak:.4f}, gain={gain:.2f}x, "
+                f"音频时长={len(audio_data)/sr:.2f}s"
+            )
+            temp_file = tempfile.NamedTemporaryFile(
+                delete=False, suffix=".wav", dir=settings.TEMP_DIR,
+                prefix="peak_norm_",
+            )
+            temp_path = temp_file.name
+            temp_file.close()
+            sf.write(temp_path, normalized, int(sr))
+            return temp_path
+        except Exception as e:
+            logger.warning(f"Peak 归一化失败，使用原始音频: {e}")
+            return None
 
     def diarize(
         self, audio_path: str, speaker_num: Optional[int] = None
@@ -298,16 +333,22 @@ class SpeakerDiarizer:
         Returns:
             原始分段列表（未合并）
         """
+        normalized_path: Optional[str] = None
         try:
+            # Peak 增益归一化：放大弱信号，提升声音小的说话人的 embedding 质量
+            normalized_path = self._peak_normalize_audio(audio_path)
+            effective_path = normalized_path or audio_path
+
             pipeline = get_global_diarization_pipeline()
 
-            pipeline_kwargs = {"merge_thr": 0.90}
+            merge_thr = settings.DIARIZATION_MERGE_THR
+            pipeline_kwargs = {"merge_thr": merge_thr}
             if speaker_num is not None and speaker_num > 0:
                 pipeline_kwargs["oracle_num"] = speaker_num
 
             logger.info(f"开始说话人分离: {audio_path}, params={pipeline_kwargs}")
             with _diarization_inference_semaphore:
-                result = pipeline(audio_path, **pipeline_kwargs)
+                result = pipeline(effective_path, **pipeline_kwargs)
 
             # 解析结果: {'text': [[start, end, speaker_id], ...]}
             # pipeline 返回类型不确定，需要安全地获取 'text' 字段
@@ -370,6 +411,14 @@ class SpeakerDiarizer:
             # 其他异常正常抛出
             logger.error(f"说话人分离失败: {e}")
             raise DefaultServerErrorException(f"说话人分离失败: {str(e)}")
+
+        finally:
+            # 清理 Peak 归一化临时文件
+            if normalized_path and os.path.exists(normalized_path):
+                try:
+                    os.remove(normalized_path)
+                except Exception:
+                    pass
 
     def merge_consecutive_segments(
         self, segments: List[SpeakerSegment]

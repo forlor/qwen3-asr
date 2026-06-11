@@ -75,6 +75,10 @@ class Settings:
     # 音频分段配置
     MAX_SEGMENT_SEC: float = 60.0  # Max offline ASR segment duration in seconds.
 
+    # 说话人分离调参
+    DIARIZATION_MERGE_THR: float = 0.70  # CAM++ 说话人合并阈值，越低越不容易把不同说话人合并（默认0.70）
+    DIARIZATION_MIN_OUTPUT_SEC: float = 5.0  # 短片段最小输出时长（秒），不足则补静音，提升 embedding 质量
+
     # Runtime 并发配置（按 backend 独立控制）
     QWEN_RUST_CPU_WORKERS: int = 4
     QWEN_RUST_ASR_CONCURRENCY: int = 0
@@ -151,6 +155,12 @@ class Settings:
 
         self.MAX_SEGMENT_SEC = float(
             os.getenv("MAX_SEGMENT_SEC", str(self.MAX_SEGMENT_SEC))
+        )
+        self.DIARIZATION_MERGE_THR = float(
+            os.getenv("DIARIZATION_MERGE_THR", str(self.DIARIZATION_MERGE_THR))
+        )
+        self.DIARIZATION_MIN_OUTPUT_SEC = float(
+            os.getenv("DIARIZATION_MIN_OUTPUT_SEC", str(self.DIARIZATION_MIN_OUTPUT_SEC))
         )
 
         self.QWEN_RUST_CPU_WORKERS = int(
