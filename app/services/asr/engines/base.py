@@ -262,6 +262,15 @@ class BaseASREngine(ABC):
             except Exception as e:
                 logger.warning(f"清理临时文件时出错: {e}")
 
+            from app.utils.text_processing import deduplicate_repetition
+            for r in results:
+                cleaned = deduplicate_repetition(r.text)
+                if cleaned != r.text:
+                    r.text = cleaned
+                    if r.word_tokens:
+                        r.word_tokens = None
+            all_texts = [r.text for r in results]
+
             full_text = "\n".join(all_texts)
 
             logger.info(

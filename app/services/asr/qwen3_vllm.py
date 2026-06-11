@@ -232,6 +232,7 @@ class Qwen3VLLMBackend:
         self._sampling_params = self._sampling_params_cls(
             temperature=0.01,
             max_tokens=max_new_tokens,
+            repetition_penalty=1.1,
         )
         self._max_inference_batch_size = max_inference_batch_size
         self._gpu_memory_utilization = gpu_memory_utilization

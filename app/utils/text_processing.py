@@ -6,6 +6,8 @@
 
 import logging
 
+import re
+
 logger = logging.getLogger(__name__)
 
 # wetext导入 - 延迟导入以避免初始化问题
@@ -57,3 +59,20 @@ def normalize_asr_text(text: str, enable_itn: bool) -> str:
     if not enable_itn:
         return text
     return apply_itn_to_text(text)
+
+
+def deduplicate_repetition(text: str) -> str:
+    """检测并去除文本中连续重复 >= 3 次的短语，只保留一次。
+
+    正常语音中的 1-2 次重复（如"对对对"、"是的是的"）不受影响。
+    """
+    if not text or len(text) < 6:
+        return text
+
+    # 匹配 2 字符以上的片段连续出现 3 次及以上的模式，单字符重复（如"好好好"）不受影响
+    pattern = re.compile(r"(.{2,}?)\1{2,}")
+    result = pattern.sub(r"\1", text)
+
+    if result != text:
+        logger.info(f"重复文本去重: {len(text)} -> {len(result)} 字符")
+    return result
