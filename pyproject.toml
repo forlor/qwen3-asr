@@ -23,7 +23,7 @@ dependencies = [
   "python-dotenv==1.2.1",
   "huggingface_hub==0.34.0",
   "hdbscan==0.8.41",
-  "pyannote.audio==3.3.2",
+  "pyannote.audio>=4.0.0",
   "loguru==0.7.2",
   "rich>=13.9,<14",
   "setuptools>=70.0.0,<81",

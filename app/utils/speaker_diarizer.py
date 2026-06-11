@@ -98,7 +98,7 @@ def get_global_diarization_pipeline() -> Any:
 
                 _global_diarization_pipeline = Pipeline.from_pretrained(
                     "pyannote/speaker-diarization-3.1",
-                    use_auth_token=hf_token if hf_token else None
+                    token=hf_token if hf_token else None
                 )
                 
                 if _global_diarization_pipeline is None:
