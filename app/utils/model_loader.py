@@ -519,10 +519,22 @@ def preload_models() -> dict[str, Any]:
             if diarization_pipeline:
                 result["speaker_diarization_model"]["loaded"] = True
             else:
-                result["speaker_diarization_model"]["error"] = "说话人分离模型加载后返回None"
+                raise RuntimeError("pyannote Pipeline.from_pretrained 返回 None，请检查模型文件是否完整")
+        except ImportError:
+            logger.error(
+                "启动失败: pyannote.audio 未安装。请执行: pip install pyannote.audio"
+            )
+            raise
         except Exception as e:
-            result["speaker_diarization_model"]["error"] = str(e)
-            logger.error("说话人分离模型(pyannote)加载失败: %s", e)
+            logger.error(
+                "启动失败: 说话人分离模型(pyannote)加载异常: %s\n"
+                "可能原因:\n"
+                "  1. pyannote.audio 未安装 → pip install pyannote.audio\n"
+                "  2. 模型文件未下载或缓存不完整 → 检查 HuggingFace 缓存目录\n"
+                "  3. HF_TOKEN 未配置 → 设置环境变量 HF_TOKEN",
+                e,
+            )
+            raise
         progress.advance("已完成说话人分离模型(pyannote)")
 
     loaded_asr_count = sum(1 for status in result["asr_models"].values() if status["loaded"])
